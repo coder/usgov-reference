@@ -26,7 +26,7 @@ metadata:
   name: kiali
   namespace: "istio-system"
   labels:
-    
+
     helm.sh/chart: kiali-server-2.26.0
     app: kiali
     app.kubernetes.io/name: kiali
@@ -55,7 +55,7 @@ metadata:
   name: kiali
   namespace: "istio-system"
   labels:
-    
+
     helm.sh/chart: kiali-server-2.26.0
     app: kiali
     app.kubernetes.io/name: kiali
@@ -72,7 +72,7 @@ metadata:
   name: kiali
   namespace: "istio-system"
   labels:
-    
+
     helm.sh/chart: kiali-server-2.26.0
     app: kiali
     app.kubernetes.io/name: kiali
@@ -243,7 +243,7 @@ kind: ClusterRole
 metadata:
   name: kiali-viewer
   labels:
-    
+
     helm.sh/chart: kiali-server-2.26.0
     app: kiali
     app.kubernetes.io/name: kiali
@@ -346,7 +346,7 @@ kind: ClusterRoleBinding
 metadata:
   name: kiali-viewer
   labels:
-    
+
     helm.sh/chart: kiali-server-2.26.0
     app: kiali
     app.kubernetes.io/name: kiali
@@ -371,7 +371,7 @@ metadata:
   name: kiali
   namespace: "istio-system"
   labels:
-    
+
     helm.sh/chart: kiali-server-2.26.0
     app: kiali
     app.kubernetes.io/name: kiali
@@ -403,7 +403,7 @@ metadata:
   name: kiali
   namespace: "istio-system"
   labels:
-    
+
     helm.sh/chart: kiali-server-2.26.0
     app: kiali
     app.kubernetes.io/name: kiali
@@ -426,7 +426,7 @@ spec:
     metadata:
       name: kiali
       labels:
-        
+
         helm.sh/chart: kiali-server-2.26.0
         app: kiali
         app.kubernetes.io/name: kiali

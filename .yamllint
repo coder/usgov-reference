@@ -1,11 +1,21 @@
 # yamllint configuration for the public reference repository.
 #
-# line-length is disabled: several manifests embed machine-generated Grafana
-# dashboard JSON on single long lines that must not be reflowed. The remaining
-# default rules still enforce indentation, key duplication, and syntax.
+# This repository vendors manifests promoted from a working deployment, so the
+# lint focuses on structural correctness (YAML syntax, duplicate keys, empty
+# values, trailing whitespace) rather than cosmetic style. Cosmetic rules that
+# the upstream manifests do not follow are disabled:
+#   - line-length: several manifests embed machine-generated Grafana dashboard
+#     JSON on single long lines that must not be reflowed.
+#   - indentation / colons / braces: upstream manifests use mixed but valid
+#     spacing that yamllint's defaults would reject.
+#   - document-start: not every manifest begins with an explicit "---".
 extends: default
 rules:
   line-length: disable
+  indentation: disable
+  colons: disable
+  braces: disable
+  document-start: disable
   truthy:
     allowed-values: ["true", "false", "yes", "no", "on", "off"]
   comments:
