@@ -1,0 +1,34 @@
+# AppProject: argocd
+#
+# Covers Argo CD self-management and the app-of-apps root Application.
+# Broad cluster resource whitelist is required for self-management: Argo
+# must be able to create and update its own CRDs, RBAC, and Application
+# objects during upgrades.
+#
+# The root-app.yaml Application deploys child Application objects to the
+# argocd namespace; it uses this project.
+apiVersion: argoproj.io/v1alpha1
+kind: AppProject
+metadata:
+  name: argocd
+  namespace: argocd
+spec:
+  description: >-
+    Argo CD self-management: the app-of-apps root Application and the
+    Argo CD install/upgrade Application (bootstrap/argocd/).
+
+  sourceRepos:
+    # In-boundary source.
+    - "http://gitlab.gitlab.svc.cluster.local/<GITLAB_GROUP>/<CLUSTER_NAME>.git"
+
+  destinations:
+    - server: "https://kubernetes.default.svc"
+      namespace: argocd
+
+  # Self-management requires the ability to update Argo CRDs and RBAC.
+  clusterResourceWhitelist:
+    - group: "*"
+      kind: "*"
+
+  orphanedResources:
+    warn: true

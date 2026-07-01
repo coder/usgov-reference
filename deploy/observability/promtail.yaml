@@ -1,0 +1,271 @@
+# Promtail node-level log collector for the GovCloud demo.
+#
+# Scope: a DaemonSet that tails every pod's container logs from /var/log/pods on
+# each node, attaches Kubernetes metadata (namespace, pod, container, app, node),
+# and pushes them to the in-cluster Loki (deploy/observability/loki.yaml). This
+# covers all workload namespaces, including coder, coder-workspaces, gitlab,
+# keycloak, monitoring, and external-secrets.
+#
+# Design choices for GovCloud + a lean demo:
+#   - The image is pulled from the private ECR mirror (no pull-through cache in
+#     GovCloud). Tag matches scripts/images.txt (grafana/promtail:3.5.9).
+#   - Promtail discovers pods with the Kubernetes SD `pod` role and reads the
+#     real log files under /var/log/pods (containerd on EKS), so no container
+#     runtime socket is needed. It runs as root because those files are
+#     root-owned, with read-only host mounts.
+#   - A headless Service plus ServiceMonitor scrape Promtail's own /metrics so
+#     the status dashboard's "Promtail" panel reflects real, scraped targets.
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: promtail
+  namespace: monitoring
+  labels:
+    app.kubernetes.io/name: promtail
+    app.kubernetes.io/part-of: <CLUSTER_NAME>
+    app.kubernetes.io/component: logging
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: promtail
+  labels:
+    app.kubernetes.io/name: promtail
+    app.kubernetes.io/part-of: <CLUSTER_NAME>
+    app.kubernetes.io/component: logging
+rules:
+  - apiGroups: [""]
+    resources:
+      - nodes
+      - nodes/proxy
+      - services
+      - endpoints
+      - pods
+    verbs: ["get", "list", "watch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: promtail
+  labels:
+    app.kubernetes.io/name: promtail
+    app.kubernetes.io/part-of: <CLUSTER_NAME>
+    app.kubernetes.io/component: logging
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: promtail
+subjects:
+  - kind: ServiceAccount
+    name: promtail
+    namespace: monitoring
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: promtail-config
+  namespace: monitoring
+  labels:
+    app.kubernetes.io/name: promtail
+    app.kubernetes.io/part-of: <CLUSTER_NAME>
+    app.kubernetes.io/component: logging
+data:
+  config.yaml: |-
+    server:
+      http_listen_port: 3101
+      grpc_listen_port: 0
+      log_level: info
+
+    positions:
+      filename: /run/promtail/positions.yaml
+
+    clients:
+      - url: http://loki.monitoring.svc:3100/loki/api/v1/push
+
+    scrape_configs:
+      # Tail every pod container log on this node and label it with Kubernetes
+      # metadata. No namespace filter, so all namespaces are captured.
+      - job_name: kubernetes-pods
+        pipeline_stages:
+          - cri: {}
+        kubernetes_sd_configs:
+          - role: pod
+        relabel_configs:
+          - source_labels:
+              - __meta_kubernetes_pod_controller_name
+            regex: ([0-9a-z-.]+?)(-[0-9a-f]{8,10})?
+            action: replace
+            target_label: __tmp_controller_name
+          - source_labels:
+              - __meta_kubernetes_pod_label_app_kubernetes_io_name
+              - __meta_kubernetes_pod_label_app
+              - __tmp_controller_name
+              - __meta_kubernetes_pod_name
+            regex: ^;*([^;]+)(;.*)?$
+            action: replace
+            target_label: app
+          - source_labels:
+              - __meta_kubernetes_pod_node_name
+            action: replace
+            target_label: node_name
+          - source_labels:
+              - __meta_kubernetes_namespace
+            action: replace
+            target_label: namespace
+          - source_labels:
+              - __meta_kubernetes_pod_name
+            action: replace
+            target_label: pod
+          - source_labels:
+              - __meta_kubernetes_pod_container_name
+            action: replace
+            target_label: container
+          # Only tail running pods that actually have a log path on this node.
+          - source_labels:
+              - __meta_kubernetes_pod_uid
+              - __meta_kubernetes_pod_container_name
+            separator: /
+            action: replace
+            replacement: /var/log/pods/*$1/*.log
+            target_label: __path__
+          # Static pods (e.g. addons) expose a config-hash annotation instead of
+          # a stable uid; map those to their on-disk path as well.
+          - source_labels:
+              - __meta_kubernetes_pod_annotationpresent_kubernetes_io_config_hash
+              - __meta_kubernetes_pod_container_name
+            separator: /
+            regex: true/(.*)
+            action: replace
+            replacement: /var/log/pods/*$1/*.log
+            target_label: __path__
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: promtail
+  namespace: monitoring
+  labels:
+    app.kubernetes.io/name: promtail
+    app.kubernetes.io/part-of: <CLUSTER_NAME>
+    app.kubernetes.io/component: logging
+spec:
+  type: ClusterIP
+  clusterIP: None
+  selector:
+    app.kubernetes.io/name: promtail
+  ports:
+    - name: http-metrics
+      port: 3101
+      targetPort: http-metrics
+      protocol: TCP
+---
+apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  name: promtail
+  namespace: monitoring
+  labels:
+    app.kubernetes.io/name: promtail
+    app.kubernetes.io/part-of: <CLUSTER_NAME>
+    app.kubernetes.io/component: logging
+spec:
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: promtail
+  updateStrategy:
+    type: RollingUpdate
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: promtail
+        app.kubernetes.io/part-of: <CLUSTER_NAME>
+        app.kubernetes.io/component: logging
+      annotations:
+        checksum/config: promtail-config-v1
+    spec:
+      serviceAccountName: promtail
+      securityContext:
+        runAsUser: 0
+        runAsGroup: 0
+      containers:
+        - name: promtail
+          image: <ACCOUNT_ID>.dkr.ecr.us-gov-west-1.amazonaws.com/docker-hub/grafana/promtail:3.5.9
+          imagePullPolicy: IfNotPresent
+          args:
+            - -config.file=/etc/promtail/config.yaml
+          env:
+            - name: HOSTNAME
+              valueFrom:
+                fieldRef:
+                  fieldPath: spec.nodeName
+          ports:
+            - name: http-metrics
+              containerPort: 3101
+              protocol: TCP
+          readinessProbe:
+            httpGet:
+              path: /ready
+              port: http-metrics
+            initialDelaySeconds: 10
+            periodSeconds: 10
+            timeoutSeconds: 5
+            failureThreshold: 6
+          resources:
+            requests:
+              cpu: 50m
+              memory: 128Mi
+            limits:
+              memory: 256Mi
+          securityContext:
+            readOnlyRootFilesystem: true
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop:
+                - ALL
+          volumeMounts:
+            - name: config
+              mountPath: /etc/promtail
+            - name: positions
+              mountPath: /run/promtail
+            - name: varlog
+              mountPath: /var/log
+              readOnly: true
+      tolerations:
+        - effect: NoSchedule
+          operator: Exists
+        - effect: NoExecute
+          operator: Exists
+      volumes:
+        - name: config
+          configMap:
+            name: promtail-config
+        - name: positions
+          hostPath:
+            path: /var/lib/promtail
+            type: DirectoryOrCreate
+        - name: varlog
+          hostPath:
+            path: /var/log
+            type: Directory
+---
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: promtail
+  namespace: monitoring
+  labels:
+    app.kubernetes.io/name: promtail
+    app.kubernetes.io/component: logging
+    release: kps
+spec:
+  namespaceSelector:
+    matchNames:
+      - monitoring
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: promtail
+  endpoints:
+    - port: http-metrics
+      path: /metrics
+      interval: 30s
+      scheme: http

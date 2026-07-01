@@ -1,0 +1,86 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+
+# Minimal read-only permissions for all jobs. Individual jobs may declare
+# additional permissions only when strictly required (e.g., gitleaks needs
+# security-events: write for SARIF upload on public repos).
+permissions:
+  contents: read
+
+jobs:
+  # ---------------------------------------------------------------------------
+  # Job 1: gitleaks
+  # Scans the repository for generic secret patterns (API keys, tokens,
+  # private keys, credentials) using the official gitleaks action.
+  #
+  # Action SHA pins: update these periodically or via Dependabot.
+  #   actions/checkout  v4  -> 34e114876b0b11c390a56381ad16ebd13914f8d5
+  #   gitleaks-action   v2  -> ff98106e4c7b2bc287b24eaf42907196329070c7
+  # ---------------------------------------------------------------------------
+  gitleaks:
+    name: Gitleaks secret scan
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        # Pin: actions/checkout v4
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
+        with:
+          fetch-depth: 0   # Full history so gitleaks can scan all commits.
+
+      - name: Run gitleaks
+        # Pin: gitleaks/gitleaks-action v2
+        uses: gitleaks/gitleaks-action@ff98106e4c7b2bc287b24eaf42907196329070c7
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  # ---------------------------------------------------------------------------
+  # Job 2: check-identifiers
+  # Runs scripts/check-identifiers.sh which detects classes of real AWS
+  # environment identifiers by regex pattern (account IDs in ARN/ECR
+  # contexts, AWS resource IDs, ACM cert UUIDs, optional base domain).
+  # No literal live-env values are embedded in the script or this workflow.
+  # ---------------------------------------------------------------------------
+  check-identifiers:
+    name: Identifier pattern scan
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        # Pin: actions/checkout v4
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
+
+      - name: Make scanner executable
+        run: chmod +x scripts/check-identifiers.sh
+
+      - name: Run identifier scan
+        run: bash scripts/check-identifiers.sh "$GITHUB_WORKSPACE"
+
+  # ---------------------------------------------------------------------------
+  # Job 3: yamllint
+  # Static YAML syntax and style check on all YAML files in the repository.
+  # ---------------------------------------------------------------------------
+  yamllint:
+    name: YAML lint
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        # Pin: actions/checkout v4
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
+
+      - name: Install yamllint
+        run: pip install yamllint --quiet
+
+      - name: Run yamllint
+        run: |
+          yamllint -d '{
+            extends: default,
+            rules: {
+              line-length: {max: 200},
+              truthy: {allowed-values: ["true", "false", "yes", "no", "on", "off"]},
+              comments: {min-spaces-from-content: 1}
+            }
+          }' .

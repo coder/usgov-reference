@@ -1,0 +1,37 @@
+# Coder route: the dashboard host (dev) plus the wildcard for workspace apps,
+# wildcard subdomain apps, terminals, and the agent's web traffic.
+#
+# The wildcard *.<BASE_DOMAIN> already matches dev.<BASE_DOMAIN>, so
+# only the wildcard is listed here (Istio rejects a VirtualService that names
+# both an exact host and a wildcard that overlaps it). Exact-host
+# VirtualServices (auth, gitlab, grafana) still take precedence over this
+# wildcard, so only the Coder dashboard and workspace-app subdomains land here.
+#
+# No route timeout is set, so Envoy applies no request timeout; this keeps
+# long-lived websockets and streaming terminals open (Envoy upgrades HTTP/1.1
+# websockets by default). Envoy does not impose a fixed request body cap, which
+# covers large uploads.
+#
+# x-forwarded-proto is forced to https for parity with the rest of the hosts.
+apiVersion: networking.istio.io/v1
+kind: VirtualService
+metadata:
+  name: coder
+  namespace: coder
+  labels:
+    app.kubernetes.io/part-of: <CLUSTER_NAME>
+spec:
+  hosts:
+    - "*.<BASE_DOMAIN>"
+  gateways:
+    - istio-system/public-gateway
+  http:
+    - headers:
+        request:
+          set:
+            x-forwarded-proto: "https"
+      route:
+        - destination:
+            host: coder.coder.svc.cluster.local
+            port:
+              number: 80

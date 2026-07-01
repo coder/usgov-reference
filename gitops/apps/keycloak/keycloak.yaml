@@ -1,0 +1,43 @@
+# Application: keycloak
+#
+# Manages the Keycloak Deployment, Service, and Ingress via Kustomize
+# source at deploy/keycloak/. Argo CD auto-detects Kustomize from the
+# presence of kustomization.yaml in that directory.
+#
+# The kustomization.yaml uses a configMapGenerator for realm-coder.json
+# with disableNameSuffixHash: true, so the generated ConfigMap name
+# keycloak-realm-coder is stable across syncs.
+#
+# Realm content (groups, mappers, persona users) is seeded on first boot
+# via the --import-realm flag and is not re-imported to an existing realm.
+# Post-boot realm drift is reconciled separately via keycloak-config-cli.
+#
+# ServerSideApply=true: Keycloak manifests can be large and benefit from
+# SSA to avoid last-applied annotation size limits. Replace=false implied.
+#
+# Manual sync only; prune and selfHeal are OFF.
+# NO metadata.finalizers.
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: keycloak
+  namespace: argocd
+spec:
+  project: apps
+
+  source:
+    repoURL: "http://gitlab.gitlab.svc.cluster.local/<GITLAB_GROUP>/<CLUSTER_NAME>.git"
+    targetRevision: main
+    # Kustomize auto-detected from deploy/keycloak/kustomization.yaml.
+    path: deploy/keycloak
+
+  destination:
+    server: "https://kubernetes.default.svc"
+    namespace: keycloak
+
+  syncPolicy:
+    # Manual sync only; prune and selfHeal are OFF.
+    syncOptions:
+      - CreateNamespace=true
+      # SSA for large Kustomize output. Replace=false implied by SSA.
+      - ServerSideApply=true

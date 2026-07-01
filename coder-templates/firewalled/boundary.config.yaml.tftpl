@@ -1,0 +1,270 @@
+#
+# Coder Boundary agent-firewall allowlist for the "firewalled" template.
+#
+# Rendered at plan time by Terraform templatefile() (so ${coder_host} is
+# substituted with this deployment's access URL host), then written to
+# ~/.config/coder_boundary/config.yaml on every workspace start. boundary
+# loads it via the BOUNDARY_CONFIG env var set on the agent.
+#
+# Rule format: https://github.com/coder/boundary#allow-rules
+#   domain=example.com       exact host match
+#   domain=*.example.com     subdomain match (does NOT include the apex)
+#   method=GET domain=...    restrict by HTTP method
+#   path=/api/v1/*           restrict by path prefix
+#
+# This allowlist is adapted from the Red Hat Summit 2026 demo template
+# (coder/demo-aigov-rhaiis-rhsummit-2026), which is based on Claude Code's
+# default allowed domains
+# (https://code.claude.com/docs/en/claude-code-on-the-web#default-allowed-domains)
+# plus this deployment's Coder access URL, the in-cluster GitLab, and test
+# fixtures. npm is intentionally left off so that asking the agent to
+# `npm install <anything>` is the obvious DENY in the demo.
+
+allowlist:
+  # This Coder deployment: AI Bridge, AgentAPI, workspace agent. Rendered
+  # from the workspace's access URL at plan time. REQUIRED, removing it
+  # breaks Claude Code inference through the AI Gateway.
+  - domain=${coder_host}
+
+  # In-cluster GitLab, so agents running under boundary can clone from and
+  # push to internal repos. The initial git-clone on workspace start runs
+  # outside boundary (agent context), but an agent invoking
+  # `git clone gitlab.<BASE_DOMAIN>/...` via its Bash tool needs this.
+  - domain=gitlab.<BASE_DOMAIN>
+
+  # Test domains
+  - method=GET domain=typicode.com
+  - method=GET domain=*.typicode.com
+
+  # Domains used by Coder workspaces (Claude Code usage telemetry via Datadog)
+  - method=POST domain=http-intake.logs.datadoghq.com
+  - method=POST domain=http-intake.logs.us5.datadoghq.com
+
+  # === Default allowed domains from Claude Code on the web ===
+  # Source: https://code.claude.com/docs/en/claude-code-on-the-web#default-allowed-domains
+
+  # Anthropic Services. *.claude.ai covers downloads.claude.ai (the Claude
+  # Code updater check, polled every 30 min) and any other subdomain
+  # Anthropic introduces. claude.ai alone is exact-match only.
+  - domain=api.anthropic.com
+  - domain=statsig.anthropic.com
+  - domain=claude.ai
+  - domain=*.claude.ai
+
+  # Version Control
+  - domain=github.com
+  - domain=www.github.com
+  - domain=api.github.com
+  - domain=raw.githubusercontent.com
+  - domain=objects.githubusercontent.com
+  - domain=codeload.github.com
+  - domain=avatars.githubusercontent.com
+  - domain=camo.githubusercontent.com
+  - domain=gist.github.com
+  - domain=gitlab.com
+  - domain=www.gitlab.com
+  - domain=registry.gitlab.com
+  - domain=bitbucket.org
+  - domain=www.bitbucket.org
+  - domain=api.bitbucket.org
+
+  # Container Registries
+  - domain=registry-1.docker.io
+  - domain=auth.docker.io
+  - domain=index.docker.io
+  - domain=hub.docker.com
+  - domain=www.docker.com
+  - domain=production.cloudflare.docker.com
+  - domain=download.docker.com
+  - domain=*.gcr.io
+  - domain=ghcr.io
+  - domain=mcr.microsoft.com
+  - domain=*.data.mcr.microsoft.com
+
+  # AWS CDN / object storage. Many release artifacts (npm tarballs, GitHub
+  # release assets redirected via CloudFront, third-party installers, SDK
+  # downloads) are hosted on *.amazonaws.com or CloudFront. Without this
+  # rule, installs of random OSS tooling silently fail with connection
+  # errors.
+  - domain=*.amazonaws.com
+  - domain=*.cloudfront.net
+
+  # Cloud Platforms
+  - domain=cloud.google.com
+  - domain=accounts.google.com
+  - domain=gcloud.google.com
+  - domain=*.googleapis.com
+  - domain=storage.googleapis.com
+  - domain=compute.googleapis.com
+  - domain=container.googleapis.com
+  - domain=azure.com
+  - domain=portal.azure.com
+  - domain=microsoft.com
+  - domain=www.microsoft.com
+  - domain=*.microsoftonline.com
+  - domain=packages.microsoft.com
+  - domain=dotnet.microsoft.com
+  - domain=dot.net
+  - domain=visualstudio.com
+  - domain=dev.azure.com
+  - domain=oracle.com
+  - domain=www.oracle.com
+  - domain=java.com
+  - domain=www.java.com
+  - domain=java.net
+  - domain=www.java.net
+  - domain=download.oracle.com
+  - domain=yum.oracle.com
+
+  # Package Managers - JavaScript/Node
+  #
+  # Intentionally NOT allowlisted in this demo template. Asking the agent
+  # to `npm install <anything>` produces a fast, obvious DENY on the
+  # Grafana dashboard, the "Part 1" firewall demo. If you fork this
+  # template for real dev work, add these back:
+  #   - domain=registry.npmjs.org
+  #   - domain=www.npmjs.com
+  #   - domain=www.npmjs.org
+  #   - domain=npmjs.com
+  #   - domain=npmjs.org
+  #   - domain=yarnpkg.com
+  #   - domain=registry.yarnpkg.com
+
+  # Package Managers - Python
+  - domain=pypi.org
+  - domain=www.pypi.org
+  - domain=files.pythonhosted.org
+  - domain=pythonhosted.org
+  - domain=test.pypi.org
+  - domain=pypi.python.org
+  - domain=pypa.io
+  - domain=www.pypa.io
+
+  # Package Managers - Ruby
+  - domain=rubygems.org
+  - domain=www.rubygems.org
+  - domain=api.rubygems.org
+  - domain=index.rubygems.org
+  - domain=ruby-lang.org
+  - domain=www.ruby-lang.org
+  - domain=rubyforge.org
+  - domain=www.rubyforge.org
+  - domain=rubyonrails.org
+  - domain=www.rubyonrails.org
+  - domain=rvm.io
+  - domain=get.rvm.io
+
+  # Package Managers - Rust
+  - domain=crates.io
+  - domain=www.crates.io
+  - domain=static.crates.io
+  - domain=rustup.rs
+  - domain=static.rust-lang.org
+  - domain=www.rust-lang.org
+
+  # Package Managers - Go
+  - domain=proxy.golang.org
+  - domain=sum.golang.org
+  - domain=index.golang.org
+  - domain=golang.org
+  - domain=www.golang.org
+  - domain=go.dev
+  - domain=dl.google.com
+  - domain=goproxy.io
+  - domain=pkg.go.dev
+
+  # Package Managers - JVM
+  - domain=maven.org
+  - domain=repo.maven.org
+  - domain=central.maven.org
+  - domain=repo1.maven.org
+  - domain=jcenter.bintray.com
+  - domain=gradle.org
+  - domain=www.gradle.org
+  - domain=services.gradle.org
+  - domain=spring.io
+  - domain=repo.spring.io
+
+  # Package Managers - Other Languages
+  - domain=packagist.org
+  - domain=www.packagist.org
+  - domain=repo.packagist.org
+  - domain=nuget.org
+  - domain=www.nuget.org
+  - domain=api.nuget.org
+  - domain=pub.dev
+  - domain=api.pub.dev
+  - domain=hex.pm
+  - domain=www.hex.pm
+  - domain=cpan.org
+  - domain=www.cpan.org
+  - domain=metacpan.org
+  - domain=www.metacpan.org
+  - domain=api.metacpan.org
+  - domain=cocoapods.org
+  - domain=www.cocoapods.org
+  - domain=cdn.cocoapods.org
+  - domain=haskell.org
+  - domain=www.haskell.org
+  - domain=hackage.haskell.org
+  - domain=swift.org
+  - domain=www.swift.org
+
+  # Linux Distributions
+  - domain=archive.ubuntu.com
+  - domain=security.ubuntu.com
+  - domain=ubuntu.com
+  - domain=www.ubuntu.com
+  - domain=*.ubuntu.com
+  - domain=ppa.launchpad.net
+  - domain=launchpad.net
+  - domain=www.launchpad.net
+
+  # Development Tools & Platforms
+  - domain=dl.k8s.io
+  - domain=pkgs.k8s.io
+  - domain=k8s.io
+  - domain=www.k8s.io
+  - domain=releases.hashicorp.com
+  - domain=apt.releases.hashicorp.com
+  - domain=rpm.releases.hashicorp.com
+  - domain=archive.releases.hashicorp.com
+  - domain=hashicorp.com
+  - domain=www.hashicorp.com
+  - domain=repo.anaconda.com
+  - domain=conda.anaconda.org
+  - domain=anaconda.org
+  - domain=www.anaconda.com
+  - domain=anaconda.com
+  - domain=continuum.io
+  - domain=apache.org
+  - domain=www.apache.org
+  - domain=archive.apache.org
+  - domain=downloads.apache.org
+  - domain=eclipse.org
+  - domain=www.eclipse.org
+  - domain=download.eclipse.org
+  - domain=nodejs.org
+  - domain=www.nodejs.org
+
+  # Cloud Services & Monitoring
+  - domain=statsig.com
+  - domain=www.statsig.com
+  - domain=api.statsig.com
+  - domain=*.sentry.io
+
+  # Content Delivery & Mirrors
+  - domain=*.sourceforge.net
+  - domain=packagecloud.io
+  - domain=*.packagecloud.io
+
+  # Schema & Configuration
+  - domain=json-schema.org
+  - domain=www.json-schema.org
+  - domain=json.schemastore.org
+  - domain=www.schemastore.org
+
+log_dir: /tmp/boundary_logs
+log_level: warn
+proxy_port: 8087
+jail_type: landjail

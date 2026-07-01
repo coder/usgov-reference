@@ -1,0 +1,19 @@
+# reconstructed from live `helm get values --all`; verify against `helm get manifest`
+# before any GitOps sync.
+#
+# Chart: aws-load-balancer-controller-3.4.0
+# Installed in namespace: kube-system
+#
+# image.repository and image.tag were NOT user-set; chart defaults apply:
+#   repository: public.ecr.aws/eks/aws-load-balancer-controller
+#   tag: v3.4.0
+# If a private ECR mirror is required for GovCloud egress restrictions,
+# override image.repository and image.tag explicitly before syncing.
+clusterName: <CLUSTER_NAME>
+region: us-gov-west-1
+serviceAccount:
+  annotations:
+    eks.amazonaws.com/role-arn: arn:aws-us-gov:iam::<ACCOUNT_ID>:role/<CLUSTER_NAME>-lbc
+  create: true
+  name: aws-load-balancer-controller
+vpcId: <VPC_ID>

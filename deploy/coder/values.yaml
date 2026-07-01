@@ -1,0 +1,273 @@
+# Helm values for the official Coder chart, pinned to v2.34.1.
+# Chart + appVersion 2.34.1 (see versions.lock.yaml / deploy/CONVENTIONS.md).
+# v2.34.1 is a patch over v2.34.0 that strips Istio/Envoy proxy headers from
+# AI Gateway requests before SigV4 signing, fixing Bedrock InvokeModel 403s
+# (backport of coder/coder#26019 as #26053), and preserves gateway model
+# names (#26039). The provider seed env below is unchanged, so the upgrade
+# is seed-safe.
+#
+# Scope of this file: the Coder control-plane only. The platform layer
+# (orchestrator) owns ingress-nginx, the NLB + ACM cert, the `coder`
+# namespace, and the k8s Secrets referenced below. This file only declares
+# Coder's Deployment, ServiceAccount, Service, and Ingress.
+#
+# TLS: terminates UPSTREAM at the NLB (ACM cert) via the ingress-nginx
+# controller Service annotations. Traffic from nginx to Coder is plain HTTP,
+# so the Ingress here requests NO certificate (no cert-manager).
+#
+# >>> READ deploy/coder/README.md before installing. <<<
+# In particular, the AI Gateway provider env vars below are DEPRECATED as of
+# v2.34: they SEED the database ONCE on first startup, then the database is
+# authoritative. Changing them after seeding makes coderd fail to start.
+
+coder:
+  # Image is the upstream ghcr.io/coder/coder:v2.34.1 mirrored into private
+  # ECR (no pull-through cache in GovCloud). Mirror mapping from CONVENTIONS:
+  #   ghcr.io/coder/coder:v2.34.1
+  #     -> <ACCOUNT_ID>.dkr.ecr.us-gov-west-1.amazonaws.com/ghcr/coder/coder:v2.34.1
+  image:
+    repo: "<ACCOUNT_ID>.dkr.ecr.us-gov-west-1.amazonaws.com/ghcr/coder/coder"
+    tag: "v2.34.1"
+    pullPolicy: IfNotPresent
+
+  # The chart always creates a ServiceAccount named `coder`. Annotate it for
+  # IRSA so the AI Gateway Bedrock provider can call bedrock:InvokeModel and
+  # bedrock:InvokeModelWithResponseStream with temporary credentials (no static
+  # AWS keys). Role authored in terraform/ (output: bedrock_role_arn).
+  serviceAccount:
+    name: coder
+    workspacePerms: true
+    enableDeployments: true
+    annotations:
+      eks.amazonaws.com/role-arn: "arn:aws-us-gov:iam::<ACCOUNT_ID>:role/<CLUSTER_NAME>-coder-bedrock"
+
+  # Coder sits BEHIND ingress-nginx, so its own Service must NOT provision a
+  # second load balancer. Override the chart default (LoadBalancer) to ClusterIP.
+  service:
+    enable: true
+    type: ClusterIP
+
+  # We set CODER_ACCESS_URL explicitly below, so do not let the chart inject a
+  # cluster-internal access URL.
+  envUseClusterAccessURL: false
+
+  # One internet-facing NLB -> ingress-nginx -> this Ingress. TLS already
+  # terminated at the NLB, so tls.enable=false (plain HTTP backend, no cert
+  # requested here).
+  ingress:
+    enable: true
+    className: "nginx"
+    host: "dev.<BASE_DOMAIN>"
+    wildcardHost: "*.<BASE_DOMAIN>"
+    tls:
+      enable: false
+    annotations:
+      # TLS is terminated upstream at the NLB; do not redirect to HTTPS at nginx
+      # (backend is plain HTTP) to avoid a redirect loop.
+      nginx.ingress.kubernetes.io/ssl-redirect: "false"
+      # Coder relies on long-lived websockets (web terminal, agent, logs) and
+      # streams large payloads; relax nginx proxy limits accordingly.
+      nginx.ingress.kubernetes.io/proxy-read-timeout: "86400"
+      nginx.ingress.kubernetes.io/proxy-send-timeout: "86400"
+      nginx.ingress.kubernetes.io/proxy-body-size: "0"
+
+  env:
+    # --- Core access URLs -------------------------------------------------
+    - name: CODER_ACCESS_URL
+      value: "https://dev.<BASE_DOMAIN>"
+    # Single-level wildcard so the one ACM cert covers dashboard + apps.
+    - name: CODER_WILDCARD_ACCESS_URL
+      value: "*.<BASE_DOMAIN>"
+
+    # --- Database ---------------------------------------------------------
+    # Full libpq/URL connection string for the `coder` DB on RDS, supplied by
+    # the platform layer as Secret `coder-db` (key `url`). See secrets.example.yaml.
+    - name: CODER_PG_CONNECTION_URL
+      valueFrom:
+        secretKeyRef:
+          name: coder-db
+          key: url
+
+    # --- Keycloak OIDC SSO ------------------------------------------------
+    - name: CODER_OIDC_ISSUER_URL
+      value: "https://auth.<BASE_DOMAIN>/realms/coder"
+    - name: CODER_OIDC_CLIENT_ID
+      value: "coder"
+    - name: CODER_OIDC_CLIENT_SECRET
+      valueFrom:
+        secretKeyRef:
+          name: coder-oidc
+          key: client-secret
+    # Standard OIDC claims emitted by a Keycloak realm.
+    - name: CODER_OIDC_SCOPES
+      value: "openid,profile,email"
+    - name: CODER_OIDC_EMAIL_FIELD
+      value: "email"
+    - name: CODER_OIDC_USERNAME_FIELD
+      value: "preferred_username"
+    # Demo: let SSO users self-provision on first login.
+    - name: CODER_OIDC_ALLOW_SIGNUPS
+      value: "true"
+    - name: CODER_OIDC_SIGN_IN_TEXT
+      value: "Sign in with Keycloak"
+
+    # --- Auth boundary hardening ------------------------------------------
+    # Coder enables a built-in GitHub login + GitHub external-auth provider by
+    # default (Coder's own hosted GitHub app), both of which call github.com,
+    # i.e. OUT of the GovCloud boundary. Disable it so login is Keycloak-only
+    # and git stays on the in-cluster GitLab.
+    - name: CODER_OAUTH2_GITHUB_DEFAULT_PROVIDER_ENABLE
+      value: "false"
+
+    # Force every interactive login through Keycloak (OIDC). Disabling built-in
+    # password authentication hides the password form and rejects password
+    # logins for ALL users, including owners (coderd/userauth.go blocks the
+    # request with no owner exception). The bootstrap `admin` owner therefore
+    # signs in only via SSO afterward; automation uses a pre-minted API token
+    # (token auth is unaffected by this flag). Break-glass recovery if OIDC is
+    # unavailable: `kubectl exec` the coder pod and run
+    # `coder server create-admin-user`, or set this back to "false".
+    - name: CODER_DISABLE_PASSWORD_AUTH
+      value: "true"
+
+    # --- Git external auth: in-cluster GitLab (in-boundary) ----------------
+    # Authenticates git operations inside workspaces against the in-cluster
+    # GitLab via an instance-wide OAuth app (minted in GitLab; id/secret live
+    # in Secret `coder-external-auth`). Configuring an explicit external-auth
+    # provider also SUPPRESSES Coder's built-in github.com default provider.
+    # Self-managed GitLab needs explicit auth/token/validate URLs.
+    - name: CODER_EXTERNAL_AUTH_0_ID
+      value: "gitlab"
+    - name: CODER_EXTERNAL_AUTH_0_TYPE
+      value: "gitlab"
+    - name: CODER_EXTERNAL_AUTH_0_DISPLAY_NAME
+      value: "GitLab"
+    - name: CODER_EXTERNAL_AUTH_0_CLIENT_ID
+      valueFrom:
+        secretKeyRef:
+          name: coder-external-auth
+          key: gitlab-client-id
+    - name: CODER_EXTERNAL_AUTH_0_CLIENT_SECRET
+      valueFrom:
+        secretKeyRef:
+          name: coder-external-auth
+          key: gitlab-client-secret
+    - name: CODER_EXTERNAL_AUTH_0_AUTH_URL
+      value: "https://gitlab.<BASE_DOMAIN>/oauth/authorize"
+    - name: CODER_EXTERNAL_AUTH_0_TOKEN_URL
+      value: "https://gitlab.<BASE_DOMAIN>/oauth/token"
+    - name: CODER_EXTERNAL_AUTH_0_VALIDATE_URL
+      value: "https://gitlab.<BASE_DOMAIN>/oauth/token/info"
+    - name: CODER_EXTERNAL_AUTH_0_REGEX
+      # Regex matching the GitLab hostname. Dots in <BASE_DOMAIN> must be
+      # backslash-escaped for the Go regexp (e.g. example\.com -> example\\.com).
+      value: "gitlab\\.<BASE_DOMAIN>"
+    - name: CODER_EXTERNAL_AUTH_0_SCOPES
+      value: "read_user read_repository write_repository"
+
+    # --- App isolation hardening ------------------------------------------
+    # Disable path-based workspace apps so every workspace app is served only
+    # from its own *.<BASE_DOMAIN> subdomain. Path apps share the main
+    # dashboard origin and can make authenticated requests to the Coder API,
+    # so disabling them is the hardened posture. All templates here serve
+    # their apps with subdomain = true, so nothing relies on path apps.
+    - name: CODER_DISABLE_PATH_APPS
+      value: "true"
+
+    # --- API token lifetime (demo CI durability) --------------------------
+    # Raise the token caps to 1 year so the GitLab CI token ("gitlab-ci",
+    # minted on the admin user by scripts/setup-gitlab-ci-runners.py) does not
+    # expire mid-demo. Coder governs admin-user tokens with the SEPARATE
+    # CODER_MAX_ADMIN_TOKEN_LIFETIME (defaults to 168h), so both must be set
+    # for an admin-minted token to reach 1 year. Demo env only, no CUI.
+    - name: CODER_MAX_TOKEN_LIFETIME
+      value: "8760h"
+    - name: CODER_MAX_ADMIN_TOKEN_LIFETIME
+      value: "8760h"
+
+    # --- AI Gateway (AI Governance Add-On) --------------------------------
+    # AI Gateway is enabled by default in v2.34; set explicitly for clarity.
+    # NOTE: provider env vars are deprecated and seed the DB ONCE. After the
+    # first successful startup, manage providers at /ai/settings. Do NOT edit
+    # these values in place afterward or coderd will refuse to start (drift
+    # guard). See README "AI Gateway provider seeding" for the safe workflow.
+    - name: CODER_AI_GATEWAY_ENABLED
+      value: "true"
+
+    # Provider 0 = Anthropic-direct (PRIMARY, demo reliability).
+    # Egress to api.anthropic.com leaves the VPC via the NAT gateway.
+    #
+    # NAME MUST be "anthropic": the claude-code workspace module (4.7.3)
+    # hardcodes ANTHROPIC_BASE_URL=<access_url>/api/v2/aibridge/anthropic, and
+    # the AI Gateway routes by provider NAME (verified: POST
+    # /api/v2/aibridge/<name>/v1/messages). A name like "anthropic-direct"
+    # makes that route 404, so Claude Code cannot reach the provider.
+    - name: CODER_AI_GATEWAY_PROVIDER_0_TYPE
+      value: "anthropic"
+    - name: CODER_AI_GATEWAY_PROVIDER_0_NAME
+      value: "anthropic"
+    - name: CODER_AI_GATEWAY_PROVIDER_0_BASE_URL
+      value: "https://api.anthropic.com"
+    - name: CODER_AI_GATEWAY_PROVIDER_0_KEY
+      valueFrom:
+        secretKeyRef:
+          name: coder-ai
+          key: ANTHROPIC_API_KEY
+
+    # Provider 1 = Amazon Bedrock (SECONDARY, in-boundary, IRSA, NO static keys).
+    # `bedrock` type authenticates via the AWS SDK default credential chain,
+    # which picks up the IRSA web-identity token from the annotated SA above.
+    # Bedrock-ness is detected by BEDROCK_REGION (no default); no API key is
+    # attached. Claude Sonnet 4.5 access is still gated, so this provider may be
+    # disabled at demo time from /ai/settings, but it is wired here.
+    - name: CODER_AI_GATEWAY_PROVIDER_1_TYPE
+      value: "bedrock"
+    - name: CODER_AI_GATEWAY_PROVIDER_1_NAME
+      value: "anthropic-bedrock"
+    - name: CODER_AI_GATEWAY_PROVIDER_1_BEDROCK_REGION
+      value: "us-gov-west-1"
+    - name: CODER_AI_GATEWAY_PROVIDER_1_BEDROCK_MODEL
+      value: "us-gov.anthropic.claude-sonnet-4-5-20250929-v1:0"
+    # Claude Code uses a Haiku-class "small fast model" for background tasks.
+    # Nova Pro is the proven in-GovCloud fallback.
+    - name: CODER_AI_GATEWAY_PROVIDER_1_BEDROCK_SMALL_FAST_MODEL
+      value: "amazon.nova-pro-v1:0"
+
+    # --- AWS SDK / IRSA resolution (GovCloud) -----------------------------
+    # Give the AWS SDK an explicit region for endpoint construction and for the
+    # regional STS AssumeRoleWithWebIdentity call used by IRSA.
+    - name: AWS_REGION
+      value: "us-gov-west-1"
+    - name: AWS_DEFAULT_REGION
+      value: "us-gov-west-1"
+    - name: AWS_STS_REGIONAL_ENDPOINTS
+      value: "regional"
+
+    # --- Observability: Prometheus metrics --------------------------------
+    # Serve coderd_* and Go runtime metrics so the in-cluster Prometheus can
+    # scrape them. Bind to 0.0.0.0 (not the 127.0.0.1 default) so the metrics
+    # endpoint is reachable from the cluster network; a separate ClusterIP
+    # Service `coder-metrics` (deploy/observability) exposes port 2112 and a
+    # ServiceMonitor scrapes it. COLLECT_AGENT_STATS adds per-workspace agent
+    # metrics (connections, RX/TX, latency) used by the workspace dashboards.
+    - name: CODER_PROMETHEUS_ENABLE
+      value: "true"
+    - name: CODER_PROMETHEUS_ADDRESS
+      value: "0.0.0.0:2112"
+    - name: CODER_PROMETHEUS_COLLECT_AGENT_STATS
+      value: "true"
+
+    # --- Observability: structured (JSON) logs ----------------------------
+    # Emit machine-parseable JSON logs to stderr so the cluster log pipeline
+    # can ship them to a SIEM. The human-readable stream (default /dev/stderr)
+    # is silenced to /dev/null so stderr carries JSON only, avoiding duplicate
+    # log lines. Coder has no single CODER_LOG_FORMAT flag; JSON output is
+    # selected by pointing CODER_LOGGING_JSON at a sink (here, stderr).
+    - name: CODER_LOGGING_HUMAN
+      value: "/dev/null"
+    - name: CODER_LOGGING_JSON
+      value: "/dev/stderr"
+
+  # Single replica for the demo. HA (replicaCount > 1) is an Enterprise feature
+  # and is out of scope.
+  replicaCount: 1

@@ -1,0 +1,82 @@
+# Argo CD Helm bootstrap values for <CLUSTER_NAME>.
+#
+# Chart: argo/argo-cd 10.0.1 (appVersion v3.4.4). Install into a new
+# `argocd` namespace:
+#   helm install argo-cd argo/argo-cd --version 10.0.1 -n argocd \
+#     --create-namespace -f gitops/bootstrap/argocd/values.yaml
+#
+# The Helm-native apply is not subject to the kubectl client-side CRD
+# annotation limit, so `--server-side` is unnecessary for a clean install.
+#
+# Safety constraints for bootstrap:
+#   - No external ingress or DNS for Argo; ClusterIP service only.
+#   - No auto-sync, selfHeal, or prune on any Application.
+#   - No Application finalizers.
+#   - Annotation resource tracking set at install time (before any Helm
+#     release adoption) to prevent Argo from mutating immutable label
+#     selectors in Deployment and StatefulSet specs.
+#   - Local-admin break-glass; Keycloak OIDC SSO configured separately
+#     after Keycloak is healthy.
+#
+# Break-glass admin access (no ingress, ClusterIP service):
+#   kubectl -n argocd port-forward svc/argocd-server 8080:443
+#   argocd login localhost:8080 --insecure --username admin \
+#     --password "$(kubectl -n argocd get secret argocd-initial-admin-secret \
+#       -o jsonpath='{.data.password}' | base64 -d)"
+
+global:
+  image:
+    # All Argo CD core components (server, repo-server, application-controller,
+    # applicationset-controller, notifications) share this image. ECR mirror of
+    # quay.io/argoproj/argocd (no pull-through cache in GovCloud).
+    repository: <ACCOUNT_ID>.dkr.ecr.us-gov-west-1.amazonaws.com/quay/argoproj/argocd
+    # Pin explicitly to the chart appVersion.
+    tag: v3.4.4
+
+configs:
+  cm:
+    create: true
+    # MANDATORY: annotation resource tracking, set BEFORE any Helm release is
+    # adopted. Annotation tracking keeps Argo from mutating the immutable
+    # app.kubernetes.io/instance label selectors in adopted Deployment and
+    # StatefulSet specs.
+    application.resourceTrackingMethod: annotation
+    # Local admin break-glass stays enabled. Configure Keycloak OIDC SSO
+    # separately after the identity provider is healthy.
+    admin.enabled: true
+    # NOTE: chart-default resource.exclusions are kept as-is. A global
+    # ''/Secret exclusion was deliberately rejected: Helm apps (coder,
+    # ingress-nginx, external-secrets, etc.) render Secrets that Argo must
+    # own, so excluding the Secret kind cluster-wide would break those syncs.
+    # The ESO-owned Secret guardrail is enforced per-Application via
+    # prune: false + orphanedResources.warn (set on every Application).
+  params:
+    create: true
+    # Server keeps TLS enabled (chart default). No ingress is created; access
+    # is via `kubectl port-forward` only during bootstrap.
+    server.insecure: false
+
+# No SSO on first install: disable the bundled Dex so the ghcr.io/dexidp/dex
+# image does not need mirroring. Wire Keycloak OIDC in a later step.
+dex:
+  enabled: false
+
+# Notifications are not configured in bootstrap; disable to keep the footprint
+# minimal. Re-enable when notification triggers are designed.
+notifications:
+  enabled: false
+
+redis:
+  enabled: true
+  image:
+    # ECR mirror of docker.io/library/redis at the tag the chart pins.
+    repository: <ACCOUNT_ID>.dkr.ecr.us-gov-west-1.amazonaws.com/docker-hub/library/redis
+    tag: 8.2.3-alpine
+
+server:
+  # No external exposure for Argo in bootstrap. ClusterIP plus ingress disabled
+  # are the chart defaults; set explicitly here as a guard against drift.
+  service:
+    type: ClusterIP
+  ingress:
+    enabled: false

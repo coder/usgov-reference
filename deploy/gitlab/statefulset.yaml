@@ -1,0 +1,293 @@
+---
+# GitLab CE 19.0.1, single-container Omnibus image (NOT the Helm chart).
+#
+# Topology: internet-facing NLB (terminates TLS with the ACM cert) -> ingress-nginx
+# (plain HTTP) -> this pod's bundled NGINX on port 80 -> Workhorse/Puma.
+# Because TLS is terminated upstream, the bundled NGINX listens on HTTP only and
+# we force X-Forwarded-Proto=https so GitLab builds correct https:// URLs and does
+# not redirect-loop.
+#
+# A StatefulSet (not a Deployment) is used because GitLab is stateful and each of
+# the three persistent paths is a ReadWriteOnce EBS volume; the StatefulSet gives
+# stable PVCs and never tries to run two pods against the same RWO volume.
+#
+# Database: EMBEDDED PostgreSQL bundled in the Omnibus image (default). Its data
+# lives under /var/opt/gitlab/postgresql on the data PVC. See README.md for the
+# rationale and for the shared-RDS alternative.
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: gitlab
+  namespace: gitlab
+  labels:
+    app: gitlab
+# NOTE: the platform layer may already create this ServiceAccount ("service
+# accounts created per app" in deploy/CONVENTIONS.md). Applying it here is
+# harmless and keeps this directory self-contained. GitLab with embedded
+# Postgres needs no IRSA annotation.
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: gitlab
+  namespace: gitlab
+  labels:
+    app: gitlab
+spec:
+  serviceName: gitlab
+  replicas: 1
+  # Single RWO data volume: never run two pods at once.
+  podManagementPolicy: OrderedReady
+  updateStrategy:
+    type: RollingUpdate
+  selector:
+    matchLabels:
+      app: gitlab
+  template:
+    metadata:
+      labels:
+        app: gitlab
+    spec:
+      serviceAccountName: gitlab
+      # GitLab reconfigure can take several minutes; give it time to drain.
+      terminationGracePeriodSeconds: 120
+      securityContext:
+        # The Omnibus image runs its services under runit as root by design.
+        # Do not force runAsNonRoot here.
+        fsGroup: 0
+      containers:
+        - name: gitlab
+          # Mirrored to ECR per deploy/CONVENTIONS.md:
+          #   docker.io/gitlab/gitlab-ce:19.0.1-ce.0
+          #     -> <ACCOUNT_ID>.dkr.ecr.us-gov-west-1.amazonaws.com/docker-hub/gitlab/gitlab-ce:19.0.1-ce.0
+          image: <ACCOUNT_ID>.dkr.ecr.us-gov-west-1.amazonaws.com/docker-hub/gitlab/gitlab-ce:19.0.1-ce.0
+          imagePullPolicy: IfNotPresent
+          # The hostname GitLab uses for its own checks; matches external_url host.
+          env:
+            - name: GITLAB_INITIAL_ROOT_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: gitlab-secrets
+                  key: initial_root_password
+                  # optional so the pod still starts on later restarts (after the
+                  # first boot the root password lives in the database, not here).
+                  optional: true
+            # Keycloak OIDC client secret, ESO-synced from AWS Secrets Manager
+            # (<CLUSTER_NAME>/gitlab/oidc). Referenced as ENV[...] inside the
+            # omniauth block below so no secret is written into this manifest.
+            - name: GITLAB_OIDC_CLIENT_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: gitlab-oidc
+                  key: client-secret
+                  optional: true
+            - name: GITLAB_OMNIBUS_CONFIG
+              value: |-
+                external_url 'https://gitlab.<BASE_DOMAIN>'
+
+                ## Run behind an upstream proxy that terminates TLS (NLB + ingress-nginx).
+                ## Bundled NGINX speaks plain HTTP on :80; do not terminate TLS here and
+                ## do not redirect to https (the NLB already did).
+                nginx['listen_port'] = 80
+                nginx['listen_https'] = false
+                nginx['redirect_http_to_https'] = false
+                nginx['proxy_set_headers'] = {
+                  'X-Forwarded-Proto' => 'https',
+                  'X-Forwarded-Ssl' => 'on'
+                }
+                ## Trust in-cluster proxies so client IPs are logged and users are not
+                ## shown as signed in from the proxy address (RFC1918 ranges).
+                nginx['real_ip_header'] = 'X-Forwarded-For'
+                nginx['real_ip_recursive'] = 'on'
+                nginx['real_ip_trusted_addresses'] = ['10.0.0.0/8', '172.16.0.0/12', '192.168.0.0/16']
+
+                ## Health endpoints (/-/health, /-/readiness, /-/liveness) are
+                ## IP-allowlisted to 127.0.0.0/8 by default, so kubelet probes
+                ## from the node IP get 404. Allow the VPC CIDR so the probes pass.
+                gitlab_rails['monitoring_whitelist'] = ['127.0.0.0/8', '10.0.0.0/16']
+
+                ## Initial root password, first boot only, injected from the
+                ## gitlab-secrets Secret. Ignored once the DB has a root user.
+                if ENV['GITLAB_INITIAL_ROOT_PASSWORD'] && !ENV['GITLAB_INITIAL_ROOT_PASSWORD'].empty?
+                  gitlab_rails['initial_root_password'] = ENV['GITLAB_INITIAL_ROOT_PASSWORD']
+                end
+
+                ## ---- Keycloak SSO (OpenID Connect) ----
+                ## Single sign-on against the same realm (coder) as Coder and
+                ## Grafana. The confidential client `gitlab` is created by
+                ## scripts/setup-gitlab-oidc.py; its secret is injected via the
+                ## GITLAB_OIDC_CLIENT_SECRET env above. Auto sign-on creates the
+                ## GitLab user on first Keycloak login (JIT). We deliberately do
+                ## NOT set auto_sign_in_with_provider, so the local username and
+                ## password form stays available as break-glass for root.
+                ##
+                ## Role mapping: GitLab Community Edition does NOT implement
+                ## OIDC group-to-role assignment. admin_groups / required_groups
+                ## / external_groups are EE features; CE ships only the SAML and
+                ## LDAP equivalents, with no openid_connect code path. The
+                ## admin_groups line below is therefore a NO-OP on this CE image
+                ## and is kept only so it activates automatically if the image is
+                ## ever switched to GitLab EE (Free tier). On CE, the instance
+                ## admin attribute is provisioned explicitly by
+                ## Provision the instance admin attribute out of band after first login.
+                ## Per-group membership/roles is not possible on either edition
+                ## without SAML Group Sync (a Premium feature).
+                if ENV['GITLAB_OIDC_CLIENT_SECRET'] && !ENV['GITLAB_OIDC_CLIENT_SECRET'].empty?
+                  gitlab_rails['omniauth_enabled'] = true
+                  gitlab_rails['omniauth_allow_single_sign_on'] = ['openid_connect']
+                  gitlab_rails['omniauth_block_auto_created_users'] = false
+                  gitlab_rails['omniauth_providers'] = [
+                    {
+                      name: 'openid_connect',
+                      label: 'Keycloak',
+                      args: {
+                        name: 'openid_connect',
+                        scope: ['openid', 'profile', 'email'],
+                        response_type: 'code',
+                        issuer: 'https://auth.<BASE_DOMAIN>/realms/coder',
+                        discovery: true,
+                        client_auth_method: 'basic',
+                        uid_field: 'preferred_username',
+                        pkce: true,
+                        client_options: {
+                          identifier: 'gitlab',
+                          secret: ENV['GITLAB_OIDC_CLIENT_SECRET'],
+                          redirect_uri: 'https://gitlab.<BASE_DOMAIN>/users/auth/openid_connect/callback',
+                          gitlab: {
+                            groups_attribute: 'groups',
+                            admin_groups: ['/platform/platform-admins', '/platform/org-admins']
+                          }
+                        }
+                      }
+                    }
+                  ]
+                end
+
+                ## Embedded PostgreSQL (bundled) is the default; nothing to set.
+                ## To use the shared RDS gitlabhq_production instead, see README.md.
+
+                ## ---- Trim the footprint for a demo ----
+                puma['worker_processes'] = 2
+                sidekiq['concurrency'] = 10
+                ## Umbrella switch: disables prometheus, alertmanager, and every
+                ## bundled exporter (node/redis/postgres/gitlab) in one line.
+                prometheus_monitoring['enable'] = false
+                puma['exporter_enabled'] = false
+                sidekiq['metrics_enabled'] = false
+                ## ---- Container Registry ----
+                ## Enabled for the demo image-builder CI job (Kaniko pushes here).
+                ## TLS terminates upstream at the NLB / Istio gateway (the
+                ## wildcard *.<BASE_DOMAIN> ACM cert already covers
+                ## registry.<BASE_DOMAIN>), so the bundled registry NGINX
+                ## speaks plain HTTP on :5050 and trusts the forwarded-proto
+                ## header, exactly like the main GitLab vhost above. The registry
+                ## process keeps its default 127.0.0.1:5000 listener; the
+                ## registry NGINX vhost proxies :5050 -> the registry. External
+                ## clients reach it at https://registry.<BASE_DOMAIN>
+                ## (NLB:443 -> Istio gateway -> gitlab Service :5050). Image refs
+                ## are therefore registry.<BASE_DOMAIN>/<group>/<project>.
+                registry_external_url 'https://registry.<BASE_DOMAIN>'
+                registry['enable'] = true
+                registry['registry_http_addr'] = '127.0.0.1:5000'
+                registry_nginx['listen_port'] = 5050
+                registry_nginx['listen_https'] = false
+                registry_nginx['redirect_http_to_https'] = false
+                registry_nginx['proxy_set_headers'] = {
+                  'X-Forwarded-Proto' => 'https',
+                  'X-Forwarded-Ssl' => 'on'
+                }
+                gitlab_pages['enable'] = false
+                gitlab_kas['enable'] = false
+                ## Return freed memory to the OS sooner (memory-constrained tuning).
+                gitlab_rails['env'] = { 'MALLOC_CONF' => 'dirty_decay_ms:1000,muzzy_decay_ms:1000' }
+          ports:
+            - name: http
+              containerPort: 80
+              protocol: TCP
+            - name: http-registry
+              containerPort: 5050
+              protocol: TCP
+          volumeMounts:
+            - name: etc-gitlab
+              mountPath: /etc/gitlab
+            - name: var-opt-gitlab
+              mountPath: /var/opt/gitlab
+            - name: var-log-gitlab
+              mountPath: /var/log/gitlab
+            - name: dshm
+              mountPath: /dev/shm
+          resources:
+            # Modest but functional. GitLab needs real memory even when trimmed;
+            # tune down only if the demo node is tight (expect slower boots/OOM risk).
+            requests:
+              cpu: "1"
+              memory: 4Gi
+            limits:
+              cpu: "2"
+              memory: 8Gi
+          # GitLab takes minutes to boot (asset load + DB migrations on first run).
+          # The startup probe gives it up to ~15 minutes before liveness kicks in.
+          startupProbe:
+            httpGet:
+              path: /-/health
+              port: http
+            initialDelaySeconds: 60
+            periodSeconds: 15
+            timeoutSeconds: 5
+            failureThreshold: 60
+          livenessProbe:
+            httpGet:
+              path: /-/health
+              port: http
+            periodSeconds: 30
+            timeoutSeconds: 5
+            failureThreshold: 5
+          readinessProbe:
+            httpGet:
+              path: /-/readiness
+              port: http
+            periodSeconds: 15
+            timeoutSeconds: 5
+            failureThreshold: 3
+      volumes:
+        # Mirrors the Omnibus docker recommendation of --shm-size for Postgres.
+        - name: dshm
+          emptyDir:
+            medium: Memory
+            sizeLimit: 256Mi
+  # Three PVCs map 1:1 to the three Omnibus persistence paths. StorageClass
+  # "gp3" is the cluster default (provisioner ebs.csi.aws.com,
+  # WaitForFirstConsumer, encrypted) created by the platform layer on standard
+  # EKS. The EKS Auto Mode "auto-ebs-sc" class is not used (Auto Mode was
+  # disabled; see terraform reconciliation notes).
+  volumeClaimTemplates:
+    - metadata:
+        name: etc-gitlab
+        labels:
+          app: gitlab
+      spec:
+        accessModes: ["ReadWriteOnce"]
+        storageClassName: gp3
+        resources:
+          requests:
+            storage: 2Gi
+    - metadata:
+        name: var-opt-gitlab
+        labels:
+          app: gitlab
+      spec:
+        accessModes: ["ReadWriteOnce"]
+        storageClassName: gp3
+        resources:
+          requests:
+            storage: 20Gi
+    - metadata:
+        name: var-log-gitlab
+        labels:
+          app: gitlab
+      spec:
+        accessModes: ["ReadWriteOnce"]
+        storageClassName: gp3
+        resources:
+          requests:
+            storage: 5Gi

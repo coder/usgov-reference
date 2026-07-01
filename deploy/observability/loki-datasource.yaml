@@ -1,0 +1,35 @@
+# Grafana datasource for the in-cluster Loki (deploy/observability/loki.yaml).
+#
+# The kube-prometheus-stack Grafana runs the kiwigrid sidecar with
+# `sidecar.datasources.enabled: true`, which provisions any ConfigMap labelled
+# `grafana_datasource: "1"` (from any namespace) as a Grafana datasource. So
+# adding this ConfigMap is enough; no Helm upgrade is required.
+#
+# The uid is pinned to EXACTLY "loki" because the generated Coder dashboards
+# (deploy/observability/dashboards-coder.yaml) reference datasource uid "loki"
+# on their log panels (workspace-detail "Logs", and panels in provisionerd and
+# workspaces). Creating this datasource with that uid wires those panels to the
+# live log store. isDefault stays false so Prometheus remains the default.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: loki-datasource
+  namespace: monitoring
+  labels:
+    grafana_datasource: "1"
+    app.kubernetes.io/name: loki
+    app.kubernetes.io/part-of: <CLUSTER_NAME>
+    app.kubernetes.io/component: grafana-datasource
+data:
+  loki-datasource.yaml: |-
+    apiVersion: 1
+    datasources:
+      - name: Loki
+        type: loki
+        uid: loki
+        access: proxy
+        url: http://loki.monitoring.svc:3100
+        isDefault: false
+        editable: false
+        jsonData:
+          maxLines: 1000

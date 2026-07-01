@@ -1,0 +1,29 @@
+# Port-9000 carve-out for the Keycloak management port under mesh-wide STRICT.
+#
+# Keycloak's startup/liveness/readiness probes hit the management port 9000.
+# Istio probe rewrite (on by default) already reroutes kubelet HTTP probes
+# through the pilot-agent over plain text, so the kubelet (which has no sidecar)
+# passes probes. This workload PeerAuthentication keeps Keycloak STRICT on every
+# other port while pinning 9000 to PERMISSIVE, as defense in depth in case probe
+# rewrite is ever disabled. 9000 is not exposed by any Service, so this does not
+# widen the external surface.
+#
+# This must use mtls.mode STRICT (not PERMISSIVE): a workload policy overrides
+# the mesh-wide default for the selected workload, so a PERMISSIVE workload mode
+# would silently exempt all of Keycloak from STRICT. Apply at the STRICT step.
+apiVersion: security.istio.io/v1
+kind: PeerAuthentication
+metadata:
+  name: keycloak-management
+  namespace: keycloak
+  labels:
+    app.kubernetes.io/part-of: <CLUSTER_NAME>
+spec:
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: keycloak
+  mtls:
+    mode: STRICT
+  portLevelMtls:
+    "9000":
+      mode: PERMISSIVE

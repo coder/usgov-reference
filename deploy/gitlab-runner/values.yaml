@@ -1,0 +1,151 @@
+# =============================================================================
+# GitLab Runner Helm values - <CLUSTER_NAME> GovCloud demo
+# =============================================================================
+# Chart : gitlab/gitlab-runner 0.89.1 (appVersion 19.0.1)
+#         Pinned to match the in-cluster GitLab CE server (19.0.1).
+# Deploy: helm upgrade --install gitlab-runner gitlab/gitlab-runner \
+#           --version 0.89.1 --namespace gitlab-runner \
+#           -f deploy/gitlab-runner/values.yaml
+#
+# -----------------------------------------------------------------------------
+# Istio-safe design (the "make it work with Istio" requirement)
+# -----------------------------------------------------------------------------
+# Mesh-wide STRICT mTLS is enforced. This runner lives in the NON-meshed
+# namespace `gitlab-runner` (see namespace.yaml) and never makes a plain-text
+# hop to a meshed Service. Instead:
+#   - The runner manager registers/polls GitLab at the EXTERNAL URL
+#     https://gitlab.<BASE_DOMAIN> (through the Istio ingress gateway).
+#   - CI job pods reach Coder at https://dev.<BASE_DOMAIN> the same way.
+#   - The gateway is in the mesh and performs mTLS to the gitlab/coder
+#     workloads, so the secured hop still happens at the gateway.
+#
+# -----------------------------------------------------------------------------
+# Image sourcing (egress allowed; mirrors for speed/reliability)
+# -----------------------------------------------------------------------------
+# The gitlab-runner namespace has internet egress, so this is not a strict air
+# gap. The runner manager, executor helper, and default job image are still ECR
+# mirrors (<ACCOUNT_ID>.dkr.ecr.us-gov-west-1.amazonaws.com) for speed and
+# reliability:
+#   - runner manager : docker-hub/gitlab/gitlab-runner:v19.0.1
+#   - executor helper: docker-hub/gitlab/gitlab-runner-helper:x86_64-v19.0.1
+#   - default job    : ghcr/coder/coder:v2.34.0 (ships /bin/sh + the coder CLI)
+# The build-images CI job runs Kaniko (also an ECR mirror) but pulls the UBI
+# base from registry.access.redhat.com and dnf-installs directly over egress.
+# =============================================================================
+
+gitlabUrl: https://gitlab.<BASE_DOMAIN>
+
+# Runner manager image: ECR mirror of docker.io/gitlab/gitlab-runner:v19.0.1.
+image:
+  registry: <ACCOUNT_ID>.dkr.ecr.us-gov-west-1.amazonaws.com
+  image: docker-hub/gitlab/gitlab-runner
+  tag: v19.0.1
+  pullPolicy: IfNotPresent
+
+# Global config.toml settings.
+concurrent: 6
+checkInterval: 3
+logLevel: info
+
+# The runner authentication token (glrt-...) is delivered via the ESO-synced
+# Secret `gitlab-runner-auth` (see externalsecret.yaml). NO token value lives in
+# this file or in git.
+runners:
+  secret: gitlab-runner-auth
+
+  # config.toml [[runners]] template. The chart merges this with the
+  # authentication token from the Secret above and registers the runner.
+  config: |
+    [[runners]]
+      [runners.kubernetes]
+        namespace = "gitlab-runner"
+        # Default CI job image: the already-mirrored Coder image. Jobs may
+        # override `image:` in .gitlab-ci.yml, but pinning an ECR default means
+        # no job can ever try to pull from the internet.
+        image = "<ACCOUNT_ID>.dkr.ecr.us-gov-west-1.amazonaws.com/ghcr/coder/coder:v2.34.0"
+        # Kubernetes-executor helper (clone + artifacts), ECR mirror pinned to
+        # the runner version.
+        helper_image = "<ACCOUNT_ID>.dkr.ecr.us-gov-west-1.amazonaws.com/docker-hub/gitlab/gitlab-runner-helper:x86_64-v19.0.1"
+        # Use node-cached/ECR images; never re-pull a pinned tag from outside.
+        image_pull_policy = ["if-not-present"]
+        privileged = false
+        # Modest sizing for the demo build + helper containers.
+        cpu_request = "200m"
+        memory_request = "256Mi"
+        cpu_limit = "1"
+        memory_limit = "1Gi"
+        helper_cpu_request = "100m"
+        helper_memory_request = "128Mi"
+        poll_timeout = 600
+        # Allow specific jobs to request more than the modest defaults via
+        # KUBERNETES_*_REQUEST/LIMIT job variables. The build-images job (Kaniko
+        # building the UBI9 images: dnf transactions, Node, clang) needs more
+        # memory than the 1Gi default. Nodes have ~15Gi/3.9 CPU, so a 6Gi/3-CPU
+        # ceiling fits comfortably. Only jobs that set the variables get more;
+        # everything else stays at the defaults above.
+        cpu_request_overwrite_max_allowed = "3"
+        cpu_limit_overwrite_max_allowed = "3"
+        memory_request_overwrite_max_allowed = "6Gi"
+        memory_limit_overwrite_max_allowed = "6Gi"
+      [runners.kubernetes.pod_labels]
+        "app.kubernetes.io/part-of" = "gitlab-runner"
+
+# Namespace-scoped RBAC for the Kubernetes executor (least privilege; replaces
+# the chart's default "core API group, all resources, all verbs" Role).
+rbac:
+  create: true
+  rules:
+    - apiGroups: [""]
+      resources: ["pods", "pods/attach"]
+      verbs: ["get", "list", "watch", "create", "patch", "delete"]
+    - apiGroups: [""]
+      resources: ["pods/exec"]
+      verbs: ["create", "patch", "delete"]
+    - apiGroups: [""]
+      resources: ["pods/log"]
+      verbs: ["get", "list", "watch"]
+    - apiGroups: [""]
+      resources: ["secrets", "configmaps"]
+      verbs: ["get", "list", "watch", "create", "update", "delete"]
+    - apiGroups: [""]
+      resources: ["services"]
+      verbs: ["get", "list", "watch", "create", "delete"]
+    - apiGroups: [""]
+      resources: ["events"]
+      verbs: ["list", "watch"]
+    - apiGroups: [""]
+      resources: ["serviceaccounts"]
+      verbs: ["get", "list", "watch"]
+
+serviceAccount:
+  create: true
+  name: gitlab-runner
+
+# Runner manager pod resources.
+resources:
+  requests:
+    cpu: 100m
+    memory: 128Mi
+  limits:
+    cpu: 500m
+    memory: 256Mi
+
+# Pod securityContext. The mirrored runner image (docker.io/gitlab/gitlab-runner,
+# the ubuntu variant) runs as the `gitlab-runner` user uid/gid 999 and owns
+# /home/gitlab-runner mode 0750, so the pod must run as 999 (the chart default of
+# 100/65533 cannot write the runner's home dir). These are the chart's own
+# documented "values for the ubuntu image".
+podSecurityContext:
+  runAsUser: 999
+  runAsGroup: 999
+  fsGroup: 999
+
+# Unregister the runner from GitLab on `helm uninstall` (uses the auth token).
+unregisterRunners: true
+
+# No Prometheus scrape needed for the demo.
+metrics:
+  enabled: false
+
+podLabels:
+  app.kubernetes.io/part-of: gitlab-runner

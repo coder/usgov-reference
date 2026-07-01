@@ -1,0 +1,75 @@
+# scripts/forbidden-strings.txt
+#
+# FORMAT REFERENCE for the usgov-reference public repository.
+#
+# This file contains NO real identifier values. It documents the categories
+# of identifiers that must never appear in this repository and the
+# placeholder tokens that replace them.
+#
+# -----------------------------------------------------------------------
+# PRIVATE LITERAL DENYLIST
+# -----------------------------------------------------------------------
+# The actual live-env values (AWS account ID, Route53 zone ID, ACM cert
+# UUID, base domain, cluster name, RDS endpoint token, OIDC provider ID,
+# VPC/subnet/SG/NAT IDs, internal user/org UUIDs, etc.) are stored in
+# the private upstream repository and are checked
+# in the promotion pipeline before any file is published here.
+#
+# -----------------------------------------------------------------------
+# PUBLIC GENERIC SCANNER
+# -----------------------------------------------------------------------
+# scripts/check-identifiers.sh detects identifier classes by shape using
+# extended regular expressions. It carries no literal live-env values.
+# Pattern classes it checks:
+#
+#   (1) 12-digit AWS account IDs in ARN or ECR hostname contexts
+#       Regex: arn:[partition]:[service]:[region]:[0-9]{12}:
+#              [0-9]{12}\.dkr\.ecr\.
+#
+#   (2) AWS VPC and networking resource IDs
+#       Regex: (vpc|subnet|sg|nat|igw|eni|eipalloc|rtb|acl|ami)-[0-9a-f]{8,17}
+#
+#   (3) Bare UUIDs (8-4-4-4-12 lowercase hex)
+#       Covers ACM certificate UUIDs, Coder org UUIDs, and any other
+#       UUID-shaped identifier regardless of surrounding context.
+#       Regex: [0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}
+#
+#   (4) Optional base domain (set FORBIDDEN_BASE_DOMAIN env var)
+#       Matching is backslash-aware: dots are detected even when escaped
+#       as \. or \\. in regexp config values or YAML double-encoded strings.
+#
+# -----------------------------------------------------------------------
+# PLACEHOLDER TOKEN REFERENCE
+# -----------------------------------------------------------------------
+# Use <UPPER_SNAKE_CASE> tokens for every environment-specific value.
+# Examples of category -> placeholder mapping:
+#
+#   AWS account ID       ->  <ACCOUNT_ID>
+#   Base domain          ->  <BASE_DOMAIN>
+#   Route53 zone ID      ->  <ROUTE53_ZONE_ID>
+#   ACM certificate UUID ->  <ACM_CERT_UUID>
+#   Coder org UUID       ->  <CODER_ORG_UUID>
+#   Cluster/prefix name  ->  <CLUSTER_NAME>
+#   RDS endpoint host    ->  <RDS_ENDPOINT_HOST>
+#   VPC ID               ->  <VPC_ID>
+#   Subnet ID            ->  <SUBNET_ID>
+#   Security group ID    ->  <SG_ID>
+#   OIDC provider ID     ->  <OIDC_PROVIDER_ID>
+#   Keycloak realm       ->  <KEYCLOAK_REALM>
+#   Kubernetes version   ->  <KUBERNETES_VERSION>
+#   Bedrock profile ID   ->  <BEDROCK_INFERENCE_PROFILE>
+#
+# Keep the surrounding ARN structure intact so readers understand the format:
+#   arn:aws-us-gov:iam::<ACCOUNT_ID>:role/<CLUSTER_NAME>-<ROLE_SUFFIX>
+#
+# -----------------------------------------------------------------------
+# FORKER NOTE
+# -----------------------------------------------------------------------
+# After forking this repository, set the FORBIDDEN_BASE_DOMAIN env var
+# to your own domain so the public scanner catches it:
+#
+#   FORBIDDEN_BASE_DOMAIN=myorg.example.gov bash scripts/check-identifiers.sh
+#
+# If your fork requires scanning for additional literal strings, add them
+# to a LOCAL copy of this file (outside version control) and extend the
+# scanner as needed. Do NOT commit real identifier values to this file.

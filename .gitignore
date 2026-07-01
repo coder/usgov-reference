@@ -1,0 +1,18 @@
+# Filled-in environment values must never be committed. Copy the example,
+# rename it, and keep the real copy out of version control.
+values/env.yaml
+values/env.*.yaml
+!values/env.example.yaml
+
+# Terraform
+terraform/terraform.tfvars
+terraform/*.auto.tfvars
+!terraform/terraform.tfvars.example
+terraform/.terraform/
+terraform/*.tfstate
+terraform/*.tfstate.*
+*.tfplan
+
+# Local tooling / editor noise
+.DS_Store
+*.log

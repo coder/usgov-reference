@@ -1,0 +1,36 @@
+# Application: provisioners
+#
+# Manages the Coder provisioner Deployments from deploy/coder/provisioners.yaml.
+#
+# The provisioner Deployments consume Kubernetes Secrets (one per provisioner)
+# that are ESO-owned from AWS Secrets Manager. Those Secrets must exist and
+# be synced by ESO before this Application is synced.
+#
+# Manual sync only; prune and selfHeal are OFF.
+# NO metadata.finalizers.
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: provisioners
+  namespace: argocd
+spec:
+  project: apps
+
+  source:
+    repoURL: "http://gitlab.gitlab.svc.cluster.local/<GITLAB_GROUP>/<CLUSTER_NAME>.git"
+    targetRevision: main
+    path: deploy/coder
+    directory:
+      recurse: false
+      include: "provisioners.yaml"
+
+  destination:
+    server: "https://kubernetes.default.svc"
+    namespace: coder
+
+  syncPolicy:
+    # Manual sync only; prune and selfHeal are OFF.
+    # Sync this Application only after the coder Application is healthy
+    # and the provisioner-key ESO Secrets are present.
+    syncOptions:
+      - CreateNamespace=true

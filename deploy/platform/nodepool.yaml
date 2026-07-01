@@ -1,0 +1,60 @@
+# Custom NodeClass + NodePool owned by this project.
+#
+# Why this exists: at cluster-init the EKS Auto Mode `default` NodeClass failed
+# to finish creating its node instance profile (created the profile but never
+# attached the role), and its controller is now wedged retrying CreateInstanceProfile
+# and hitting EntityAlreadyExists. Rather than touch the EKS-managed `default`
+# objects, we declare our own NodeClass with an identical role/SG but a distinct
+# name, so Auto Mode mints a brand-new instance profile that creates cleanly.
+# Nodes are restricted to the private subnets.
+apiVersion: eks.amazonaws.com/v1
+kind: NodeClass
+metadata:
+  name: coder
+spec:
+  role: <CLUSTER_NAME>-node
+  subnetSelectorTerms:
+    - id: <PRIVATE_SUBNET_ID_AZ_A>
+    - id: <PRIVATE_SUBNET_ID_AZ_B>
+    - id: <PRIVATE_SUBNET_ID_AZ_C>
+  securityGroupSelectorTerms:
+    - id: <NODE_SG_ID>
+  ephemeralStorage:
+    size: 80Gi
+    iops: 3000
+    throughput: 125
+---
+apiVersion: karpenter.sh/v1
+kind: NodePool
+metadata:
+  name: coder-general
+spec:
+  disruption:
+    budgets:
+      - nodes: 10%
+    consolidateAfter: 30s
+    consolidationPolicy: WhenEmptyOrUnderutilized
+  template:
+    spec:
+      expireAfter: 336h
+      terminationGracePeriod: 24h0m0s
+      nodeClassRef:
+        group: eks.amazonaws.com
+        kind: NodeClass
+        name: coder
+      requirements:
+        - key: karpenter.sh/capacity-type
+          operator: In
+          values: ["on-demand"]
+        - key: eks.amazonaws.com/instance-category
+          operator: In
+          values: ["c", "m", "r"]
+        - key: eks.amazonaws.com/instance-generation
+          operator: Gt
+          values: ["4"]
+        - key: kubernetes.io/arch
+          operator: In
+          values: ["amd64"]
+        - key: kubernetes.io/os
+          operator: In
+          values: ["linux"]

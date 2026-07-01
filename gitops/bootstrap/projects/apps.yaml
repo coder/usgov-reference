@@ -1,0 +1,50 @@
+# AppProject: apps
+#
+# Covers application-tier workloads: Coder (Helm), Keycloak (Kustomize),
+# GitLab (plain manifests), and the Coder provisioner Deployments.
+#
+# orphanedResources.warn (never delete): ESO-owned Kubernetes Secrets
+# (coder-db, coder-oidc, coder-ai, keycloak-admin, keycloak-db,
+# gitlab-secrets, gitlab-oidc) must never be pruned. GitLab PVC data
+# is also protected by prune: false on the gitlab Application.
+apiVersion: argoproj.io/v1alpha1
+kind: AppProject
+metadata:
+  name: apps
+  namespace: argocd
+spec:
+  description: >-
+    Application workloads: Coder Helm release, Coder provisioner Deployments,
+    Keycloak, and GitLab.
+
+  sourceRepos:
+    # In-boundary source (git manifests and Kustomize sources).
+    - "http://gitlab.gitlab.svc.cluster.local/<GITLAB_GROUP>/<CLUSTER_NAME>.git"
+    # Helm chart repo for the Coder release.
+    - "https://helm.coder.com/v2"
+
+  destinations:
+    - server: "https://kubernetes.default.svc"
+      namespace: coder
+    - server: "https://kubernetes.default.svc"
+      namespace: keycloak
+    - server: "https://kubernetes.default.svc"
+      namespace: gitlab
+
+  # Namespaced resources only for application workloads. Cluster-scoped
+  # resources (if any) are managed by the platform project.
+  clusterResourceWhitelist:
+    - group: rbac.authorization.k8s.io
+      kind: ClusterRole
+    - group: rbac.authorization.k8s.io
+      kind: ClusterRoleBinding
+
+  orphanedResources:
+    # warn only; never delete. ESO-owned Secrets and GitLab PVCs are
+    # not tracked by Argo and must not be pruned.
+    warn: true
+    ignore:
+      - group: ""
+        kind: Secret
+      - group: ""
+        kind: PersistentVolumeClaim

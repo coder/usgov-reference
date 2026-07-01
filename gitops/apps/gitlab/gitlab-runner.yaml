@@ -1,0 +1,51 @@
+# Application: gitlab-runner
+#
+# Manages the gitlab-runner Helm release (chart 0.89.1, appVersion 19.0.1).
+# Uses Argo CD multi-source: chart from the GitLab Helm repo plus values
+# from this git repo via the $values reference.
+#
+# Sync ordering: the ExternalSecret in deploy/gitlab-runner/externalsecret.yaml
+# (pulls <CLUSTER_NAME>/gitlab/runner from AWS Secrets Manager via the
+# ClusterSecretStore aws-secretsmanager, materialized as gitlab-runner-auth
+# in the gitlab-runner namespace) MUST be synced and its Secret present
+# BEFORE this Application is synced. The runner pods need that Secret to
+# authenticate to GitLab.
+#
+# Files in deploy/gitlab-runner/ NOT included in this Application:
+#   namespace.yaml      - the gitlab-runner Namespace; add it to
+#                         deploy/platform/namespaces.yaml so it is
+#                         managed by the platform/namespaces Application.
+#   externalsecret.yaml - ExternalSecret CR; manage via the secrets
+#                         Application (platform project).
+#
+# Manual sync only; prune and selfHeal are OFF.
+# NO metadata.finalizers.
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: gitlab-runner
+  namespace: argocd
+spec:
+  project: platform
+
+  sources:
+    - repoURL: "https://charts.gitlab.io"
+      chart: gitlab-runner
+      targetRevision: "0.89.1"
+      helm:
+        releaseName: gitlab-runner
+        valueFiles:
+          - "$values/deploy/gitlab-runner/values.yaml"
+
+    - repoURL: "http://gitlab.gitlab.svc.cluster.local/<GITLAB_GROUP>/<CLUSTER_NAME>.git"
+      targetRevision: main
+      ref: values
+
+  destination:
+    server: "https://kubernetes.default.svc"
+    namespace: gitlab-runner
+
+  syncPolicy:
+    # Manual sync only; prune and selfHeal are OFF.
+    syncOptions:
+      - CreateNamespace=true

@@ -1,0 +1,30 @@
+# Grafana route (the recommended canary host: lowest blast radius, unaffected by
+# the Keycloak cookie bug, and not currently a Route53 record of its own since
+# it resolves through the wildcard today).
+#
+# x-forwarded-proto is forced to https. The external scheme is always https (the
+# only client entry is the NLB 443 listener), but the L4 NLB cannot tell the
+# gateway that, so the gateway normalizes it here. set (not add) overwrites any
+# client-supplied value, so a forged header from a direct caller is replaced.
+apiVersion: networking.istio.io/v1
+kind: VirtualService
+metadata:
+  name: grafana
+  namespace: monitoring
+  labels:
+    app.kubernetes.io/part-of: <CLUSTER_NAME>
+spec:
+  hosts:
+    - "grafana.<BASE_DOMAIN>"
+  gateways:
+    - istio-system/public-gateway
+  http:
+    - headers:
+        request:
+          set:
+            x-forwarded-proto: "https"
+      route:
+        - destination:
+            host: kps-grafana.monitoring.svc.cluster.local
+            port:
+              number: 80

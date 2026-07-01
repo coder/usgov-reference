@@ -1,0 +1,174 @@
+# Keycloak 26.6.3 Deployment for the GovCloud Coder demo.
+#
+# Topology (locked by deploy/CONVENTIONS.md):
+#   client --HTTPS--> NLB (TLS terminated via ACM) --HTTP--> ingress-nginx --HTTP--> this pod:8080
+#
+# Because TLS is terminated upstream at the L4 NLB, the pod only ever sees plain
+# HTTP and cannot reliably learn the external scheme from headers. We therefore
+# pin KC_HOSTNAME to a full https:// URL so Keycloak always builds correct
+# issuer/redirect URLs, and set KC_PROXY_HEADERS=xforwarded so origin checks use
+# the forwarded headers that ingress-nginx adds.
+#
+# Start command: `start --import-realm` (NOT `start --optimized`).
+# `--optimized` requires the image to have been pre-built with `kc.sh build
+# --db=postgres` (KC_DB / KC_HEALTH_ENABLED / KC_METRICS_ENABLED / KC_CACHE are
+# build-time options). The stock upstream image we mirror is not pre-built for
+# postgres, so we use plain `start`, which runs the build step automatically on
+# first boot. See README.md "start vs start --optimized".
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: keycloak
+  namespace: keycloak
+  labels:
+    app.kubernetes.io/name: keycloak
+    app.kubernetes.io/part-of: <CLUSTER_NAME>
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: keycloak
+  namespace: keycloak
+  labels:
+    app.kubernetes.io/name: keycloak
+    app.kubernetes.io/part-of: <CLUSTER_NAME>
+    app.kubernetes.io/version: 26.6.3
+spec:
+  # Single replica for the demo. HA/clustering (jdbc-ping cache stack) is out of
+  # scope; KC_CACHE=local below avoids cluster discovery on a single pod.
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: keycloak
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: keycloak
+        app.kubernetes.io/part-of: <CLUSTER_NAME>
+        app.kubernetes.io/version: 26.6.3
+    spec:
+      serviceAccountName: keycloak
+      securityContext:
+        runAsNonRoot: true
+        fsGroup: 1000
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: keycloak
+          # Upstream: quay.io/keycloak/keycloak:26.6.3
+          # Mirrored to ECR per CONVENTIONS (quay.io/<repo> -> <registry>/quay/<repo>).
+          image: <ACCOUNT_ID>.dkr.ecr.us-gov-west-1.amazonaws.com/quay/keycloak/keycloak:26.6.3
+          imagePullPolicy: IfNotPresent
+          args:
+            - start
+            - --import-realm
+          env:
+            # ---- Database (RDS PostgreSQL 18.4, logical db `keycloak`) ----
+            - name: KC_DB
+              value: postgres
+            # Host-only RDS endpoint comes from `terraform -chdir=terraform
+            # output -raw rds_endpoint`. Not a secret; fill in at deploy time
+            # (or template via kustomize/helm). Port 5432 is the RDS PG default.
+            - name: KC_DB_URL
+              value: jdbc:postgresql://REPLACE_WITH_RDS_ENDPOINT:5432/keycloak
+            - name: KC_DB_USERNAME
+              valueFrom:
+                secretKeyRef:
+                  name: keycloak-db
+                  key: username
+            - name: KC_DB_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: keycloak-db
+                  key: password
+            # ---- Hostname / proxy (26.x hostname v2 semantics) ----
+            # Full URL => scheme/host/port are fixed; safe behind an L4 TLS
+            # terminator that does not forward a trustworthy X-Forwarded-Proto.
+            - name: KC_HOSTNAME
+              value: https://auth.<BASE_DOMAIN>
+            # xforwarded replaces the removed KC_PROXY=edge option (>= v24).
+            - name: KC_PROXY_HEADERS
+              value: xforwarded
+            # Required when TLS is terminated at the proxy (edge termination).
+            - name: KC_HTTP_ENABLED
+              value: "true"
+            # ---- Health / metrics on the management port (9000) ----
+            - name: KC_HEALTH_ENABLED
+              value: "true"
+            - name: KC_METRICS_ENABLED
+              value: "true"
+            # ---- Single-node cache (no clustering for the demo) ----
+            - name: KC_CACHE
+              value: local
+            # ---- Initial admin bootstrap (26.0+ variable names) ----
+            # Only consumed on first start against an empty DB; ignored (with a
+            # log warning) once the initial admin exists.
+            - name: KC_BOOTSTRAP_ADMIN_USERNAME
+              valueFrom:
+                secretKeyRef:
+                  name: keycloak-admin
+                  key: username
+            - name: KC_BOOTSTRAP_ADMIN_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: keycloak-admin
+                  key: password
+          ports:
+            - name: http
+              containerPort: 8080
+              protocol: TCP
+            - name: management
+              containerPort: 9000
+              protocol: TCP
+          # Probes hit the management interface (9000), never proxied externally.
+          startupProbe:
+            httpGet:
+              path: /health/started
+              port: management
+            # First boot runs DB migration + the implicit build step, so allow
+            # generous time before liveness takes over (up to ~5 min).
+            periodSeconds: 5
+            failureThreshold: 60
+            timeoutSeconds: 5
+          livenessProbe:
+            httpGet:
+              path: /health/live
+              port: management
+            periodSeconds: 10
+            failureThreshold: 6
+            timeoutSeconds: 5
+          readinessProbe:
+            httpGet:
+              path: /health/ready
+              port: management
+            periodSeconds: 10
+            failureThreshold: 6
+            timeoutSeconds: 5
+          resources:
+            requests:
+              cpu: 500m
+              memory: 1280Mi
+            limits:
+              # Keycloak sizes its heap from the container memory limit; the
+              # upstream guidance is at least 750Mi, 2Gi for production-ready.
+              memory: 2Gi
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: false
+            capabilities:
+              drop:
+                - ALL
+          volumeMounts:
+            - name: realm-import
+              mountPath: /opt/keycloak/data/import
+              readOnly: true
+      volumes:
+        # Realm JSON(s) placed here are imported when `--import-realm` is set.
+        # ConfigMap is generated from realm-coder.json (see kustomization.yaml
+        # or the manual `kubectl create configmap` command in README.md).
+        - name: realm-import
+          configMap:
+            name: keycloak-realm-coder

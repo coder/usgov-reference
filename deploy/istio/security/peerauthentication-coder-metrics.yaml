@@ -1,0 +1,28 @@
+# Per-workload STRICT for the Coder control plane, with a carve-out for the
+# Prometheus metrics port.
+#
+# Under mesh-wide STRICT, the kube-prometheus-stack Prometheus (which is NOT in
+# the mesh) can no longer scrape the Coder control plane's plain-text metrics on
+# port 2112. This workload PeerAuthentication keeps Coder STRICT on every other
+# port while pinning 2112 to PERMISSIVE, so the existing coder-metrics
+# ServiceMonitor keeps working without putting Prometheus in the mesh.
+#
+# Apply this together with (or just before) the mesh-wide STRICT policy. The
+# selector targets only the control plane (app.kubernetes.io/name: coder); the
+# provisioners do not expose a scraped metrics port.
+apiVersion: security.istio.io/v1
+kind: PeerAuthentication
+metadata:
+  name: coder-metrics
+  namespace: coder
+  labels:
+    app.kubernetes.io/part-of: <CLUSTER_NAME>
+spec:
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: coder
+  mtls:
+    mode: STRICT
+  portLevelMtls:
+    "2112":
+      mode: PERMISSIVE

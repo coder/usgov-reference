@@ -1,0 +1,38 @@
+# ServiceMonitor for the Istio control plane (istiod).
+#
+# istiod exposes its self-metrics (pilot_xds*, pilot_proxy_convergence*,
+# galley/validation, process_* and the Go runtime series) on the istiod Service
+# port http-monitoring (15014). This is the official Istio "Prometheus with
+# Operator" control-plane ServiceMonitor (samples/addons/extras/
+# prometheus-operator at the istio release-1.30 tag) with two adaptations:
+#   1. release=kps so the kube-prometheus-stack operator selects it, matching
+#      the other monitors in deploy/observability.
+#   2. The selector additionally requires that istio.io/tag is absent. This
+#      install also has an istiod-revision-tag-default Service that fronts the
+#      SAME istiod pod and also carries istio=pilot; selecting it too would
+#      double-scrape istiod and double-count control-plane metrics. Excluding
+#      the tagged Service scrapes istiod exactly once.
+#
+# targetLabels:[app] copies the Service's app label (istiod) onto the series,
+# which the Istio Control Plane Grafana dashboard expects.
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: istio-component-monitor
+  namespace: istio-system
+  labels:
+    monitoring: istio-components
+    release: kps
+    app.kubernetes.io/part-of: <CLUSTER_NAME>
+spec:
+  jobLabel: istio
+  targetLabels: [app]
+  selector:
+    matchExpressions:
+      - { key: istio, operator: In, values: [pilot] }
+      - { key: istio.io/tag, operator: DoesNotExist }
+  namespaceSelector:
+    any: true
+  endpoints:
+    - port: http-monitoring
+      interval: 15s

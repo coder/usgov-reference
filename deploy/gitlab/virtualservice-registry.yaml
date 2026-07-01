@@ -1,0 +1,35 @@
+# =============================================================================
+# VirtualService: route the GitLab Container Registry host through the shared
+# Istio ingress gateway to the bundled registry NGINX on the gitlab pod.
+# =============================================================================
+# registry.<BASE_DOMAIN> is already covered by:
+#   - DNS: the *.<BASE_DOMAIN> wildcard record -> Istio gateway NLB.
+#   - TLS: the *.<BASE_DOMAIN> ACM cert on the NLB (terminated upstream).
+#   - Gateway: the public-gateway's *.<BASE_DOMAIN> server on 80/443.
+# So only this host->Service route is new. The gateway is in the mesh and does
+# (auto) mTLS to the meshed gitlab workload, so the CI job (in the non-meshed
+# gitlab-runner namespace) reaches the registry over the external HTTPS URL with
+# no plaintext non-meshed -> meshed Service hop, consistent with the runner
+# design.
+apiVersion: networking.istio.io/v1
+kind: VirtualService
+metadata:
+  name: gitlab-registry
+  namespace: gitlab
+  labels:
+    app: gitlab
+spec:
+  hosts:
+    - registry.<BASE_DOMAIN>
+  gateways:
+    - istio-system/public-gateway
+  http:
+    - headers:
+        request:
+          set:
+            x-forwarded-proto: https
+      route:
+        - destination:
+            host: gitlab.gitlab.svc.cluster.local
+            port:
+              number: 5050

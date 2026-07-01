@@ -1,0 +1,42 @@
+# Root app-of-apps Application.
+#
+# Apply this ONCE by hand during bootstrap AFTER Argo CD is installed:
+#   kubectl apply -n argocd -f gitops/bootstrap/root-app.yaml
+#
+# After that first apply, Argo CD reconciles this Application and all
+# child Applications from git. Manual sync only; no automated sync.
+#
+# NO metadata.finalizers. Deleting this Application must never cascade
+# to live workloads.
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: root
+  namespace: argocd
+spec:
+  project: argocd
+
+  source:
+    # In-boundary source: in-cluster GitLab service URL.
+    # The GitLab project <GITLAB_GROUP>/<CLUSTER_NAME> and deploy token
+    # (stored in ASM at <CLUSTER_NAME>/argocd/gitlab-repo and surfaced as
+    # an ExternalSecret in the argocd namespace) must be provisioned before
+    # applying this Application.
+    repoURL: "http://gitlab.gitlab.svc.cluster.local/<GITLAB_GROUP>/<CLUSTER_NAME>.git"
+    targetRevision: main
+    path: gitops/apps
+    directory:
+      # Recurse into platform/, coder/, keycloak/, gitlab/,
+      # observability/, and mesh/ subdirectories to discover all child
+      # Application YAMLs.
+      recurse: true
+
+  destination:
+    # Child Application objects are created in the argocd namespace.
+    server: "https://kubernetes.default.svc"
+    namespace: argocd
+
+  syncPolicy:
+    # Manual sync only. prune and selfHeal are OFF.
+    syncOptions:
+      - CreateNamespace=false

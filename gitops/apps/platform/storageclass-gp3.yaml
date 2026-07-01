@@ -1,0 +1,41 @@
+# Application: storageclass-gp3
+#
+# Manages the gp3 default StorageClass manifest.
+# Path: deploy/platform/storageclass-gp3.yaml
+#
+# StorageClass is cluster-scoped and immutable once created (parameters
+# are immutable; changing provisioner or reclaimPolicy requires delete
+# and recreate, which would interrupt dynamic provisioning). Adopt in
+# place; never delete or recreate.
+#
+# The storageclass.kubernetes.io/is-default-class annotation makes this
+# the cluster default; it must be preserved exactly on adoption.
+#
+# Manual sync only; prune and selfHeal are OFF.
+# NO metadata.finalizers.
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: storageclass-gp3
+  namespace: argocd
+spec:
+  project: platform
+
+  source:
+    repoURL: "http://gitlab.gitlab.svc.cluster.local/<GITLAB_GROUP>/<CLUSTER_NAME>.git"
+    targetRevision: main
+    path: deploy/platform
+    directory:
+      recurse: false
+      include: "storageclass-gp3.yaml"
+
+  destination:
+    server: "https://kubernetes.default.svc"
+    # Cluster-scoped object; namespace is required but unused for
+    # StorageClass resources. Using default as the conventional placeholder.
+    namespace: default
+
+  syncPolicy:
+    # Manual sync only; prune and selfHeal are OFF.
+    syncOptions:
+      - CreateNamespace=false

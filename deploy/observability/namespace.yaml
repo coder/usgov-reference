@@ -1,0 +1,9 @@
+# Dedicated namespace for the in-cluster observability stack
+# (kube-prometheus-stack: Prometheus + Grafana + the Prometheus operator).
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: monitoring
+  labels:
+    app.kubernetes.io/part-of: <CLUSTER_NAME>
+    app.kubernetes.io/component: observability

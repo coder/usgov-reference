@@ -1,0 +1,21 @@
+# ClusterIP service for Keycloak. Only the main HTTP port (8080) is exposed to
+# ingress-nginx. The management port (9000, health/metrics) is intentionally NOT
+# exposed via the Service; probes reach it pod-locally and it must not be
+# reachable through the proxy.
+apiVersion: v1
+kind: Service
+metadata:
+  name: keycloak
+  namespace: keycloak
+  labels:
+    app.kubernetes.io/name: keycloak
+    app.kubernetes.io/part-of: <CLUSTER_NAME>
+spec:
+  type: ClusterIP
+  selector:
+    app.kubernetes.io/name: keycloak
+  ports:
+    - name: http
+      port: 8080
+      targetPort: http
+      protocol: TCP

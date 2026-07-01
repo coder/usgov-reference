@@ -1,0 +1,56 @@
+# Application: gitlab
+#
+# Manages the GitLab StatefulSet, Service, and Ingress from deploy/gitlab/.
+#
+# DATA PROTECTION: GitLab uses RWO gp3 PVCs created by volumeClaimTemplates
+# (the only copy of GitLab data and the embedded Postgres database).
+# The following rules are ABSOLUTE:
+#   - Replace=false: NEVER use Replace=true; it would destroy PVC data.
+#   - Never prune PVCs: prune stays OFF (no automated block).
+#   - StatefulSet selector and volumeClaimTemplates are immutable: Argo
+#     must never try to mutate those fields. Annotation tracking (set at
+#     Argo install) avoids touching them; SSA with Replace=false is safe.
+#   - Never delete and recreate the StatefulSet: that orphans or destroys
+#     the data PVCs.
+#
+# ServerSideApply=true: large StatefulSet manifest; SSA avoids annotation
+# size limits. Replace=false is implied by SSA (patch only, never replace).
+#
+# virtualservice-registry.yaml (Istio) is excluded until the mesh
+# adoption design is complete. secrets.example.yaml is documentation
+# only and must not be applied. README.md is not a manifest.
+#
+# Manual sync only; prune and selfHeal are OFF.
+# NO metadata.finalizers.
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: gitlab
+  namespace: argocd
+spec:
+  project: apps
+
+  source:
+    repoURL: "http://gitlab.gitlab.svc.cluster.local/<GITLAB_GROUP>/<CLUSTER_NAME>.git"
+    targetRevision: main
+    path: deploy/gitlab
+    directory:
+      recurse: false
+      # Include only the live workload manifests. Exclude:
+      #   virtualservice-registry.yaml (Istio, not enabled)
+      #   secrets.example.yaml (documentation, not a live manifest)
+      #   README.md (not a manifest)
+      include: "{statefulset.yaml,service.yaml,ingress.yaml}"
+
+  destination:
+    server: "https://kubernetes.default.svc"
+    namespace: gitlab
+
+  syncPolicy:
+    # Manual sync only; prune and selfHeal are OFF. PVCs must NEVER be pruned.
+    syncOptions:
+      - CreateNamespace=true
+      # SSA for large StatefulSet manifest. Replace=false implied: SSA
+      # patches only, never replaces or recreates. This protects PVC data
+      # and avoids touching immutable StatefulSet selectors.
+      - ServerSideApply=true

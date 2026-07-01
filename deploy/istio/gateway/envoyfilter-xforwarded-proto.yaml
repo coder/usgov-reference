@@ -1,0 +1,41 @@
+# OPTIONAL / ALTERNATIVE. Not applied by default.
+#
+# The per-host VirtualService `headers.request.set: x-forwarded-proto: https`
+# (see virtualservice-*.yaml) is the primary, targeted fix. This EnvoyFilter is
+# the gateway-wide belt-and-suspenders: it rewrites the request scheme (and the
+# derived X-Forwarded-Proto) to https at the ingress gateway's HTTP connection
+# manager for every host on the listener. Use this only if the VirtualService
+# header-set ever proves insufficient (for example a future backend that reads
+# the :scheme pseudo-header rather than X-Forwarded-Proto).
+#
+# Apply: kubectl apply -f deploy/istio/gateway/envoyfilter-xforwarded-proto.yaml
+# Rollback: kubectl delete -f deploy/istio/gateway/envoyfilter-xforwarded-proto.yaml
+apiVersion: networking.istio.io/v1alpha3
+kind: EnvoyFilter
+metadata:
+  name: ingress-force-https-scheme
+  namespace: istio-system
+  labels:
+    app.kubernetes.io/part-of: <CLUSTER_NAME>
+spec:
+  workloadSelector:
+    labels:
+      istio: ingressgateway
+  configPatches:
+    - applyTo: NETWORK_FILTER
+      match:
+        context: GATEWAY
+        listener:
+          filterChain:
+            filter:
+              name: envoy.filters.network.http_connection_manager
+      patch:
+        operation: MERGE
+        value:
+          typed_config:
+            "@type": type.googleapis.com/envoy.extensions.filters.network.http_connection_manager.v3.HttpConnectionManager
+            # Force the request scheme to https on this listener. Envoy uses this
+            # to populate X-Forwarded-Proto for upstreams, deterministically,
+            # regardless of what the L4 NLB forwards.
+            scheme_header_transformation:
+              scheme_to_overwrite: https

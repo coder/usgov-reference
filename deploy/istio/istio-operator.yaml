@@ -1,0 +1,102 @@
+# IstioOperator install config for the GovCloud Coder demo (EKS k8s 1.36).
+#
+# Apply with istioctl (the file-based IstioOperator API is still the supported
+# install input in Istio 1.30; only the in-cluster operator controller was
+# removed):
+#
+#   istioctl install -f deploy/istio/istio-operator.yaml
+#
+# Version lock: Istio 1.30.1. Istio 1.30 is the only currently supported line
+# that certifies Kubernetes 1.36 (1.30 supports 1.32 to 1.36; 1.29 tops out at
+# 1.35). See docs/plans/istio-implementation.md for the support-matrix citation.
+#
+# Air gap: every image is pulled from the ECR mirror. hub points at the
+# docker-hub/istio path produced by scripts/mirror-images.sh, and tag pins the
+# release, so istiod, the ingress gateway, and every injected sidecar pull
+# proxyv2 and pilot from ECR (no internet egress).
+apiVersion: install.istio.io/v1alpha1
+kind: IstioOperator
+metadata:
+  name: <CLUSTER_NAME>
+  namespace: istio-system
+spec:
+  profile: default
+
+  # ECR mirror. Resolves to:
+  #   <hub>/pilot:1.30.1    -> istiod
+  #   <hub>/proxyv2:1.30.1  -> sidecars and the ingress gateway data plane
+  hub: <ACCOUNT_ID>.dkr.ecr.us-gov-west-1.amazonaws.com/docker-hub/istio
+  tag: 1.30.1
+
+  meshConfig:
+    # Envoy and istiod access logs to stdout so the existing Promtail DaemonSet
+    # ships them to Loki like every other pod.
+    accessLogFile: /dev/stdout
+    # Keep egress open during rollout. Mesh-external destinations (RDS) still
+    # work without a ServiceEntry. Tightening to REGISTRY_ONLY is a documented
+    # future hardening step, not part of this adoption.
+    outboundTrafficPolicy:
+      mode: ALLOW_ANY
+    defaultConfig:
+      # Avoid app-before-proxy startup races so a pod is never briefly unable to
+      # reach the mesh while its sidecar is still coming up.
+      holdApplicationUntilProxyStarts: true
+
+  components:
+    pilot:
+      k8s:
+        resources:
+          requests:
+            cpu: 250m
+            memory: 256Mi
+        hpaSpec:
+          minReplicas: 1
+          maxReplicas: 3
+
+    ingressGateways:
+      - name: istio-ingressgateway
+        enabled: true
+        k8s:
+          hpaSpec:
+            minReplicas: 2
+            maxReplicas: 4
+          service:
+            type: LoadBalancer
+            # The AWS Load Balancer Controller provisions an internet-facing NLB
+            # for this Service. TLS is terminated at the NLB with the shared ACM
+            # cert (ssl-ports=443), exactly like the ingress-nginx Service today.
+            # Both the 80 and 443 Service ports forward to the gateway pod's
+            # plain-HTTP listener (containerPort 8080), so the NLB hands the
+            # gateway decrypted HTTP and the gateway is the single L7 hop.
+            ports:
+              - name: status-port
+                port: 15021
+                targetPort: 15021
+              - name: http2
+                port: 80
+                targetPort: 8080
+              # 443 maps to a distinct container port (8443) to avoid duplicate
+              # containerPort generation on the gateway Deployment. The NLB
+              # already terminated TLS, so 8443 is a plain-HTTP listener here,
+              # served by the Gateway's port-443 HTTP server (see gateway.yaml).
+              - name: https
+                port: 443
+                targetPort: 8443
+          serviceAnnotations:
+            service.beta.kubernetes.io/aws-load-balancer-type: external
+            service.beta.kubernetes.io/aws-load-balancer-scheme: internet-facing
+            service.beta.kubernetes.io/aws-load-balancer-nlb-target-type: ip
+            service.beta.kubernetes.io/aws-load-balancer-ssl-cert: "arn:aws-us-gov:acm:us-gov-west-1:<ACCOUNT_ID>:certificate/<ACM_CERT_UUID>"
+            service.beta.kubernetes.io/aws-load-balancer-ssl-ports: "443"
+            service.beta.kubernetes.io/aws-load-balancer-backend-protocol: tcp
+            service.beta.kubernetes.io/aws-load-balancer-cross-zone-load-balancing-enabled: "true"
+
+  values:
+    global:
+      # Istio CNI is intentionally disabled for the first install. Sidecar
+      # networking is set up by the istio-init container on standard EKS nodes.
+      # install-cni:1.30.1 is mirrored to ECR so the CNI DaemonSet can be
+      # enabled later as a hardening step without another mirror pass.
+      istioNamespace: istio-system
+    pilot:
+      autoscaleEnabled: true

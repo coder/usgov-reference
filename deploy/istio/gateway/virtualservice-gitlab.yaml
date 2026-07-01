@@ -1,0 +1,29 @@
+# GitLab route. No route timeout (long git-over-http operations, CI log streams,
+# and web terminals stay open), and Envoy imposes no fixed body cap (git pushes,
+# LFS objects, registry/artifact uploads).
+#
+# x-forwarded-proto is forced to https for parity. GitLab already builds https
+# URLs from its external_url, so this is consistency rather than a bug fix, but
+# it keeps every backend seeing the true external scheme.
+apiVersion: networking.istio.io/v1
+kind: VirtualService
+metadata:
+  name: gitlab
+  namespace: gitlab
+  labels:
+    app.kubernetes.io/part-of: <CLUSTER_NAME>
+spec:
+  hosts:
+    - "gitlab.<BASE_DOMAIN>"
+  gateways:
+    - istio-system/public-gateway
+  http:
+    - headers:
+        request:
+          set:
+            x-forwarded-proto: "https"
+      route:
+        - destination:
+            host: gitlab.gitlab.svc.cluster.local
+            port:
+              number: 80

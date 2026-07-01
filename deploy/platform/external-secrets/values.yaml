@@ -1,0 +1,39 @@
+# Helm values for External Secrets Operator (chart/appVersion 2.6.0).
+#
+# ESO syncs secrets from AWS Secrets Manager (<CLUSTER_NAME>/*) into Kubernetes
+# Secrets, so ASM is the source of truth and no secret material lives in git or
+# in a local file. The controller authenticates to ASM via IRSA (no static AWS
+# keys): its ServiceAccount is annotated with role <CLUSTER_NAME>-external-secrets,
+# which is allowed secretsmanager:GetSecretValue/DescribeSecret on
+# arn:aws-us-gov:secretsmanager:us-gov-west-1:<ACCOUNT_ID>:secret:<CLUSTER_NAME>/*.
+#
+# Images are pulled from the private ECR mirror (no GHCR pull-through in
+# GovCloud). All three components share one image. Install with release name
+# `external-secrets` in namespace `external-secrets` so the controller SA is
+# named `external-secrets` (matches the IRSA trust subject).
+
+installCRDs: true
+crds:
+  createClusterSecretStore: true
+
+image:
+  repository: "<ACCOUNT_ID>.dkr.ecr.us-gov-west-1.amazonaws.com/ghcr/external-secrets/external-secrets"
+  tag: "v2.6.0"
+  pullPolicy: IfNotPresent
+
+serviceAccount:
+  name: external-secrets
+  annotations:
+    eks.amazonaws.com/role-arn: "arn:aws-us-gov:iam::<ACCOUNT_ID>:role/<CLUSTER_NAME>-external-secrets"
+
+webhook:
+  image:
+    repository: "<ACCOUNT_ID>.dkr.ecr.us-gov-west-1.amazonaws.com/ghcr/external-secrets/external-secrets"
+    tag: "v2.6.0"
+    pullPolicy: IfNotPresent
+
+certController:
+  image:
+    repository: "<ACCOUNT_ID>.dkr.ecr.us-gov-west-1.amazonaws.com/ghcr/external-secrets/external-secrets"
+    tag: "v2.6.0"
+    pullPolicy: IfNotPresent

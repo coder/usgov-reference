@@ -1,0 +1,107 @@
+# Image mirror list for <CLUSTER_NAME> (ECR has no pull-through in GovCloud).
+# One fully-qualified upstream image reference per line. Comments and blanks ignored.
+# Pin tags (or digests) explicitly. Avoid :latest for reproducibility.
+#
+# Mapping to ECR (handled by mirror-images.sh):
+#   docker.io/library/nginx:1.27      -> <ecr>/docker-hub/library/nginx:1.27
+#   docker.io/bitnami/postgresql:16   -> <ecr>/docker-hub/bitnami/postgresql:16
+#   ghcr.io/org/app:v1.2.3            -> <ecr>/ghcr/org/app:v1.2.3
+#   quay.io/keycloak/keycloak:26.0    -> <ecr>/quay/keycloak/keycloak:26.0
+
+# --- Coder control plane (deploy/coder) ---
+ghcr.io/coder/coder:v2.34.1
+
+# --- Keycloak SSO (deploy/keycloak) ---
+quay.io/keycloak/keycloak:26.6.3
+
+# --- GitLab single-container omnibus (deploy/gitlab) ---
+docker.io/gitlab/gitlab-ce:19.0.1-ce.0
+
+# --- Workspace base image for the Claude Code template (coder-templates/claude-code) ---
+docker.io/codercom/enterprise-base:ubuntu-noble-20260601
+
+# --- GitLab CI runner (deploy/gitlab-runner) ---
+# Runner + Kubernetes-executor helper, pinned to match the GitLab CE server
+# (19.0.1). The helper tag x86_64-v19.0.1 is the alpine helper the Kubernetes
+# executor uses to clone the repo and manage the build pod. The CI JOB image is
+# the already-mirrored ghcr/coder/coder:v2.34.0 (it ships /bin/sh + the coder
+# CLI), so no separate job image is mirrored here.
+docker.io/gitlab/gitlab-runner:v19.0.1
+docker.io/gitlab/gitlab-runner-helper:x86_64-v19.0.1
+
+# Kaniko image builder for the build-images CI job (deploy/gitlab-runner).
+# The -debug variant ships a busybox shell at /busybox, which the GitLab CI
+# Kubernetes executor needs to run the job script. Builds run rootless and
+# unprivileged (no docker-in-docker). Kaniko pulls the UBI base from
+# registry.access.redhat.com and dnf-installs directly (the gitlab-runner
+# namespace has egress), then pushes the built images to the project's GitLab
+# Container Registry with the CI job token. Mapping: gcr.io/X -> <ecr>/gcr/X.
+gcr.io/kaniko-project/executor:v1.24.0-debug
+
+# --- External Secrets Operator (deploy/platform/external-secrets) ---
+# Controller, webhook, and cert-controller all use this single image.
+ghcr.io/external-secrets/external-secrets:v2.6.0
+
+# --- Observability stack (deploy/observability) ---
+# kube-prometheus-stack 86.2.0 (Prometheus + Grafana + operator), minimal set.
+# Alertmanager, node-exporter, and kube-state-metrics are disabled, so their
+# images are intentionally not mirrored.
+quay.io/prometheus/prometheus:v3.12.0-distroless
+quay.io/prometheus-operator/prometheus-operator:v0.91.0
+quay.io/prometheus-operator/prometheus-config-reloader:v0.91.0
+docker.io/grafana/grafana:13.0.1-security-01
+quay.io/kiwigrid/k8s-sidecar:2.7.3
+
+# --- Logging stack (deploy/observability) ---
+# In-cluster logs: single-binary Grafana Loki plus a node-level Promtail
+# collector DaemonSet. Both pinned to the 3.5 release line (released in
+# lockstep). Loki persists on a filesystem PVC; Promtail tails /var/log/pods
+# and pushes to Loki. Referenced from manifests as the ECR mirror path
+# docker-hub/grafana/loki and docker-hub/grafana/promtail.
+docker.io/grafana/loki:3.5.9
+docker.io/grafana/promtail:3.5.9
+
+# --- Istio service mesh (deploy/istio) ---
+# Istio 1.30.1: the only currently supported Istio line that certifies
+# Kubernetes 1.36 (1.30 supports k8s 1.32-1.36; 1.29 stops at 1.35).
+# Sourced from docker.io/istio so the existing docker.io -> docker-hub/ mapping
+# applies with no mirror-script change (gcr.io/istio-release is the canonical
+# registry but is not handled by ecr_repo_path()).
+#   pilot       -> istiod control plane
+#   proxyv2     -> sidecar and ingress-gateway data plane
+#   install-cni -> optional Istio CNI DaemonSet (mirrored now; not enabled in the
+#                  first install, which uses the istio-init container instead).
+# Configure Istio hub=<ecr>/docker-hub/istio, tag=1.30.1 (see
+# deploy/istio/istio-operator.yaml) so all components pull from ECR.
+docker.io/istio/pilot:1.30.1
+docker.io/istio/proxyv2:1.30.1
+docker.io/istio/install-cni:1.30.1
+
+# --- Istio mesh observability UI (deploy/istio/observability) ---
+# Kiali server: the mesh service-graph console (mTLS padlock badges, traffic
+# topology). v2.26 is the line Istio 1.30 certifies (the istio-1.30.1 Kiali
+# addon ships quay.io/kiali/kiali:v2.26 and labels it v2.26.0). Pinned to the
+# v2.26.0 patch for reproducibility. Deployed as the Kiali SERVER (no operator)
+# via the kiali-server Helm chart 2.26.0 with the image overridden to this ECR
+# mirror path (quay/kiali/kiali). The Istio Grafana dashboards are plain JSON
+# ConfigMaps and need no image.
+quay.io/kiali/kiali:v2.26.0
+
+# --- Argo CD GitOps control plane (gitops/bootstrap/argocd) ---
+# Argo CD chart argo/argo-cd 10.0.1 (appVersion v3.4.4; the latest patch on the
+# supported 3.4 line; 3.5 is RC-only). All core components (server, repo-server,
+# application-controller, applicationset-controller, notifications) share the
+# single argocd image, so only one core image is mirrored. The bootstrap install
+# disables Dex (no SSO yet, so ghcr.io/dexidp/dex is intentionally not mirrored)
+# and redis-ha, leaving only the core image plus the bundled redis. Mapping:
+#   quay.io/argoproj/argocd   -> <ecr>/quay/argoproj/argocd
+#   docker.io/library/redis   -> <ecr>/docker-hub/library/redis
+quay.io/argoproj/argocd:v3.4.4
+docker.io/library/redis:8.2.3-alpine
+
+# --- Keycloak realm reconcile (Phase 4, gitops-adoption.md section 6.2) ---
+# keycloak-config-cli for the Keycloak realm reconcile Job. Pin the variant
+# that supports Keycloak 26.x (versions.lock.yaml: keycloak 26.6.3). Confirm
+# the exact tag from the adorsys release page before mirroring.
+# Mapping: quay.io/adorsys/keycloak-config-cli -> <ecr>/quay/adorsys/keycloak-config-cli
+# quay.io/adorsys/keycloak-config-cli:<v6.x-26.x-tag>

@@ -1,0 +1,211 @@
+# Helm values for prometheus-community/kube-prometheus-stack, pinned to chart
+# 86.2.0 (appVersion / prometheus-operator v0.91.0).
+#
+# Scope: the in-cluster metrics + dashboards stack for the GovCloud demo,
+# installed into the `monitoring` namespace. It scrapes the Coder control
+# plane's /metrics endpoint (via the ServiceMonitor in deploy/observability)
+# and renders Coder's prebuilt Grafana dashboards with live data.
+#
+# Design choices for GovCloud + a lean demo:
+#   - Every image is pulled from the private ECR mirror (no pull-through cache
+#     in GovCloud). Tags match scripts/images.txt.
+#   - Alertmanager, node-exporter, and kube-state-metrics are DISABLED to cut
+#     the image-mirroring surface and footprint. The Coder dashboards' core
+#     panels (coderd_*, up, and cAdvisor CPU/memory from the kubelet) render;
+#     a handful of kube-state-metrics-only panels stay empty by design.
+#   - The managed EKS control-plane ServiceMonitors are disabled (their
+#     endpoints are not scrapeable on EKS and would show as permanently-down
+#     targets). The kubelet ServiceMonitor is kept for container resource
+#     metrics.
+#   - Prometheus and Grafana persist on gp3 PVCs (modest sizes).
+#   - Grafana's admin password comes from a Kubernetes Secret that External
+#     Secrets Operator syncs from AWS Secrets Manager (admin.existingSecret).
+
+crds:
+  enabled: true
+
+# --- Components we do not run (cuts images + footprint) ---------------------
+alertmanager:
+  enabled: false
+nodeExporter:
+  enabled: false
+kubeStateMetrics:
+  enabled: false
+
+# Managed EKS control-plane components are not directly scrapeable; disabling
+# their ServiceMonitors keeps the demo's target list clean. Keep the kubelet so
+# cAdvisor container CPU/memory metrics power the Coder dashboards.
+kubeApiServer:
+  enabled: false
+kubeControllerManager:
+  enabled: false
+kubeScheduler:
+  enabled: false
+kubeProxy:
+  enabled: false
+kubeEtcd:
+  enabled: false
+coreDns:
+  enabled: false
+kubelet:
+  enabled: true
+
+# Bundled alerting rules assume kube-state-metrics / node-exporter; skip them.
+defaultRules:
+  create: false
+windowsMonitoring:
+  enabled: false
+
+# --- Prometheus operator ----------------------------------------------------
+prometheusOperator:
+  # Admission webhooks pull an extra registry.k8s.io cert-gen image that the
+  # ECR mirror script does not handle; disable them (not needed for the demo).
+  admissionWebhooks:
+    enabled: false
+  tls:
+    enabled: false
+  image:
+    registry: <ACCOUNT_ID>.dkr.ecr.us-gov-west-1.amazonaws.com
+    repository: quay/prometheus-operator/prometheus-operator
+    tag: v0.91.0
+  prometheusConfigReloader:
+    image:
+      registry: <ACCOUNT_ID>.dkr.ecr.us-gov-west-1.amazonaws.com
+      repository: quay/prometheus-operator/prometheus-config-reloader
+      tag: v0.91.0
+  resources:
+    requests:
+      cpu: 50m
+      memory: 128Mi
+    limits:
+      memory: 256Mi
+
+# --- Prometheus -------------------------------------------------------------
+prometheus:
+  prometheusSpec:
+    image:
+      registry: <ACCOUNT_ID>.dkr.ecr.us-gov-west-1.amazonaws.com
+      repository: quay/prometheus/prometheus
+      tag: v3.12.0-distroless
+    # Discover ServiceMonitors / PodMonitors / rules regardless of the Helm
+    # release label, across all namespaces. This lets the Coder ServiceMonitor
+    # in the `coder` namespace be selected without extra labels.
+    serviceMonitorSelectorNilUsesHelmValues: false
+    podMonitorSelectorNilUsesHelmValues: false
+    ruleSelectorNilUsesHelmValues: false
+    probeSelectorNilUsesHelmValues: false
+    scrapeConfigSelectorNilUsesHelmValues: false
+    retention: 7d
+    resources:
+      requests:
+        cpu: 200m
+        memory: 768Mi
+      limits:
+        memory: 1536Mi
+    storageSpec:
+      volumeClaimTemplate:
+        spec:
+          storageClassName: gp3
+          accessModes:
+            - ReadWriteOnce
+          resources:
+            requests:
+              storage: 20Gi
+
+# --- Grafana ----------------------------------------------------------------
+grafana:
+  enabled: true
+  image:
+    registry: <ACCOUNT_ID>.dkr.ecr.us-gov-west-1.amazonaws.com
+    repository: docker-hub/grafana/grafana
+    tag: 13.0.1-security-01
+  # Admin credentials from the ESO-synced Secret `grafana-admin` (sourced from
+  # AWS Secrets Manager <CLUSTER_NAME>/observability/grafana). The local admin
+  # login is kept as break-glass alongside Keycloak SSO below.
+  admin:
+    existingSecret: grafana-admin
+    userKey: admin-user
+    passwordKey: admin-password
+  # Secrets injected as env vars so nothing sensitive sits in git:
+  #   - GF_AUTH_GENERIC_OAUTH_CLIENT_SECRET: Keycloak OIDC client secret
+  #     (ESO-synced from <CLUSTER_NAME>/observability/grafana-oauth) that
+  #     overrides [auth.generic_oauth] client_secret.
+  #   - AIGOV_DB_PASSWORD: password for the read-only Coder DB role grafana_ro,
+  #     from the Kubernetes Secret `aigov-grafana-db`. Grafana expands it as
+  #     ${AIGOV_DB_PASSWORD} in datasource-aibridge-postgres.yaml, which powers
+  #     the AI Governance dashboard's usage, cost, and session drill-downs.
+  envValueFrom:
+    GF_AUTH_GENERIC_OAUTH_CLIENT_SECRET:
+      secretKeyRef:
+        name: grafana-oauth
+        key: client-secret
+    AIGOV_DB_PASSWORD:
+      secretKeyRef:
+        name: aigov-grafana-db
+        key: AIGOV_DB_PASSWORD
+  # The bundled Kubernetes dashboards need kube-state-metrics, which is off.
+  defaultDashboardsEnabled: false
+  service:
+    type: ClusterIP
+  # Grafana is exposed through our own Ingress (grafana-ingress.yaml); the NLB
+  # terminates TLS, so set root_url to the public HTTPS host for correct login
+  # redirects.
+  ingress:
+    enabled: false
+  "grafana.ini":
+    server:
+      root_url: https://grafana.<BASE_DOMAIN>
+    # Single sign-on via the same Keycloak realm (`coder`) as the rest of the
+    # stack. The confidential client `grafana` is created by
+    # scripts/setup-grafana-oidc.py; the secret is injected via the env var
+    # above. The local admin login form is left enabled as break-glass.
+    auth:
+      oauth_auto_login: false
+      disable_login_form: false
+    "auth.generic_oauth":
+      enabled: true
+      name: Keycloak
+      icon: signin
+      client_id: grafana
+      # client_secret comes from GF_AUTH_GENERIC_OAUTH_CLIENT_SECRET (env).
+      scopes: "openid email profile"
+      auth_url: https://auth.<BASE_DOMAIN>/realms/coder/protocol/openid-connect/auth
+      token_url: https://auth.<BASE_DOMAIN>/realms/coder/protocol/openid-connect/token
+      api_url: https://auth.<BASE_DOMAIN>/realms/coder/protocol/openid-connect/userinfo
+      login_attribute_path: preferred_username
+      email_attribute_path: email
+      name_attribute_path: name
+      use_pkce: true
+      allow_sign_up: true
+      # Map Keycloak group membership to a Grafana org role. Platform
+      # Engineering (group path /platform) administers Grafana; every other
+      # authenticated realm user gets read-only Viewer.
+      role_attribute_path: "contains(groups[*], '/platform') && 'Admin' || 'Viewer'"
+      role_attribute_strict: false
+      # Org role only; the Grafana server-admin flag stays with the local admin.
+      allow_assign_grafana_admin: false
+  sidecar:
+    image:
+      registry: <ACCOUNT_ID>.dkr.ecr.us-gov-west-1.amazonaws.com
+      repository: quay/kiwigrid/k8s-sidecar
+      tag: 2.7.3
+    dashboards:
+      enabled: true
+      label: grafana_dashboard
+      labelValue: "1"
+      searchNamespace: ALL
+    datasources:
+      enabled: true
+  persistence:
+    enabled: true
+    type: pvc
+    storageClassName: gp3
+    accessModes:
+      - ReadWriteOnce
+    size: 5Gi
+  resources:
+    requests:
+      cpu: 100m
+      memory: 256Mi
+    limits:
+      memory: 512Mi

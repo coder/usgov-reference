@@ -1,0 +1,24 @@
+# DestinationRule for the RDS PostgreSQL ServiceEntry.
+#
+# TLS mode DISABLE means the sidecar does NOT originate Istio TLS to RDS. The
+# application already speaks TLS to RDS itself (sslmode=require, rds.force_ssl=1),
+# so the sidecar must pass that encrypted stream through untouched. Setting any
+# other mode would double-wrap or break the JDBC/libpq TLS handshake.
+#
+# This is the correct mesh treatment for app-originated TLS to an external
+# endpoint; mesh-wide STRICT PeerAuthentication does not apply here because RDS
+# is mesh-external egress, not sidecar-to-sidecar traffic.
+apiVersion: networking.istio.io/v1
+kind: DestinationRule
+metadata:
+  name: rds-postgres
+  namespace: istio-system
+  labels:
+    app.kubernetes.io/part-of: <CLUSTER_NAME>
+spec:
+  exportTo:
+    - "*"
+  host: <RDS_ENDPOINT_HOST>
+  trafficPolicy:
+    tls:
+      mode: DISABLE

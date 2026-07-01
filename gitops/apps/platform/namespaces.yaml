@@ -1,0 +1,44 @@
+# Application: namespaces
+#
+# Manages the explicit Namespace manifests for all platform and workload
+# namespaces: coder, coder-workspaces, keycloak, gitlab, ingress-nginx,
+# external-secrets, monitoring (and argocd, which is created at install).
+#
+# Path: deploy/platform/namespaces.yaml
+#
+# This Application is cluster-scoped (creates Namespace objects). The
+# destination.namespace is set to default as a placeholder; it is unused
+# because Namespace objects carry no namespace in their metadata.
+#
+# CreateNamespace=true is NOT set here: this Application IS the namespace
+# creator. Other Applications use CreateNamespace=true as a safety net
+# only because this Application is expected to be synced first.
+#
+# Manual sync only; prune and selfHeal are OFF.
+# NO metadata.finalizers.
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: namespaces
+  namespace: argocd
+spec:
+  project: platform
+
+  source:
+    repoURL: "http://gitlab.gitlab.svc.cluster.local/<GITLAB_GROUP>/<CLUSTER_NAME>.git"
+    targetRevision: main
+    path: deploy/platform
+    directory:
+      recurse: false
+      include: "namespaces.yaml"
+
+  destination:
+    server: "https://kubernetes.default.svc"
+    # Cluster-scoped objects; namespace is a required field but unused
+    # for Namespace resources. Using default as the conventional placeholder.
+    namespace: default
+
+  syncPolicy:
+    # Manual sync only; prune and selfHeal are OFF.
+    syncOptions:
+      - CreateNamespace=false

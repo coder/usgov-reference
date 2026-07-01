@@ -1,0 +1,115 @@
+# AppProject: platform
+#
+# Covers platform infrastructure, observability, CI/CD runner, and mesh
+# Applications:
+#   namespaces, gp3 StorageClass, workspace RBAC, ingress-nginx,
+#   aws-load-balancer-controller, external-secrets operator,
+#   ClusterSecretStore + ExternalSecrets (secrets/),
+#   kube-prometheus-stack + observability extras (monitoring),
+#   gitlab-runner (CI/CD runner infrastructure),
+#   istio placeholder (mesh/istio - must remain unsynced until adoption
+#   design is complete; see apps/mesh/istio.yaml).
+#
+# Least-privilege: source repo restricted to the single in-cluster
+# GitLab project plus the upstream chart repos for Helm releases in
+# this project. Destination namespaces enumerate all namespaces these
+# Applications target, including the namespaces where ExternalSecrets
+# are materialized (coder, keycloak, gitlab, monitoring).
+#
+# orphanedResources.warn (never delete): ESO-owned Kubernetes Secrets
+# are not in git and must never be pruned or flagged for deletion.
+apiVersion: argoproj.io/v1alpha1
+kind: AppProject
+metadata:
+  name: platform
+  namespace: argocd
+spec:
+  description: >-
+    Platform infrastructure, observability, CI/CD runner, and mesh placeholder
+    Applications (ingress-nginx, aws-load-balancer-controller, external-secrets,
+    gp3 StorageClass, workspace RBAC, namespaces, monitoring, gitlab-runner,
+    istio).
+
+  sourceRepos:
+    # In-boundary source (git values and plain manifests).
+    - "http://gitlab.gitlab.svc.cluster.local/<GITLAB_GROUP>/<CLUSTER_NAME>.git"
+    # Helm chart repos for platform Applications.
+    - "https://kubernetes.github.io/ingress-nginx"
+    - "https://aws.github.io/eks-charts"
+    - "https://charts.external-secrets.io"
+    # kube-prometheus-stack (monitoring Application).
+    - "https://prometheus-community.github.io/helm-charts"
+    # gitlab-runner CI/CD runner.
+    - "https://charts.gitlab.io"
+
+  destinations:
+    # aws-load-balancer-controller lives in kube-system.
+    - server: "https://kubernetes.default.svc"
+      namespace: kube-system
+    - server: "https://kubernetes.default.svc"
+      namespace: ingress-nginx
+    - server: "https://kubernetes.default.svc"
+      namespace: external-secrets
+    # workspace-rbac targets coder-workspaces.
+    - server: "https://kubernetes.default.svc"
+      namespace: coder-workspaces
+    # Cluster-scoped objects (StorageClass, Namespace, ClusterSecretStore)
+    # use default as the destination namespace placeholder; the objects
+    # carry no namespace in their metadata.
+    - server: "https://kubernetes.default.svc"
+      namespace: default
+    # ExternalSecrets in secretstore-and-externalsecrets.yaml target the
+    # following namespaces directly via their metadata.namespace fields.
+    - server: "https://kubernetes.default.svc"
+      namespace: coder
+    - server: "https://kubernetes.default.svc"
+      namespace: keycloak
+    - server: "https://kubernetes.default.svc"
+      namespace: gitlab
+    - server: "https://kubernetes.default.svc"
+      namespace: monitoring
+    # gitlab-runner CI/CD runner build infrastructure.
+    - server: "https://kubernetes.default.svc"
+      namespace: gitlab-runner
+    # istio-system: Istio mesh and ingress gateway (PLACEHOLDER; see
+    # gitops/apps/mesh/istio.yaml). Expand clusterResourceWhitelist with
+    # Istio CRD kinds (networking.istio.io, security.istio.io, etc.) when
+    # the Istio adoption design is finalised and sync is enabled.
+    - server: "https://kubernetes.default.svc"
+      namespace: istio-system
+
+  # Cluster-scoped resource kinds this project's Applications may manage.
+  clusterResourceWhitelist:
+    - group: ""
+      kind: Namespace
+    - group: storage.k8s.io
+      kind: StorageClass
+    - group: external-secrets.io
+      kind: ClusterSecretStore
+    - group: rbac.authorization.k8s.io
+      kind: ClusterRole
+    - group: rbac.authorization.k8s.io
+      kind: ClusterRoleBinding
+    - group: apiextensions.k8s.io
+      kind: CustomResourceDefinition
+    - group: admissionregistration.k8s.io
+      kind: ValidatingWebhookConfiguration
+    - group: admissionregistration.k8s.io
+      kind: MutatingWebhookConfiguration
+    - group: networking.k8s.io
+      kind: IngressClass
+    # ALB controller CRDs.
+    - group: elbv2.k8s.aws
+      kind: IngressClassParams
+    - group: elbv2.k8s.aws
+      kind: TargetGroupBinding
+    - group: elbv2.k8s.aws
+      kind: TargetGroupBindingList
+
+  orphanedResources:
+    # warn only; never delete. ESO-owned Kubernetes Secrets are not in
+    # git; they must not be treated as orphans or pruned.
+    warn: true
+    ignore:
+      - group: ""
+        kind: Secret

@@ -1,0 +1,6 @@
+{
+  "display_name": "C/C++ Engineer",
+  "description": "C/C++ workspace: clang, gcc, CMake, Ninja, gdb, valgrind. Use for C/C++ services, native libraries, and systems programming.",
+  "icon": "/icon/cpp.svg",
+  "slug": "cpp-engineer"
+}

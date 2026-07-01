@@ -1,0 +1,28 @@
+# =============================================================================
+# gitlab-runner namespace (deliberately NOT in the Istio mesh).
+# =============================================================================
+# Mesh-wide STRICT mTLS is enforced (istio-system/default PeerAuthentication).
+# The meshed namespaces are coder, keycloak, and gitlab. This namespace is kept
+# OUT of the mesh on purpose:
+#
+#   1. CI job pods come and go quickly; an injected sidecar would race the job
+#      container's lifecycle (the classic "sidecar still running after the job
+#      finished" problem) and complicate teardown.
+#   2. Under STRICT mTLS a plain-text connection from a non-meshed pod to a
+#      meshed Service (for example gitlab.gitlab.svc:80) is refused. The runner
+#      and its jobs therefore talk to GitLab and Coder over their EXTERNAL URLs
+#      (https://gitlab.<BASE_DOMAIN>, https://dev.<BASE_DOMAIN>), which
+#      enter through the Istio ingress gateway. The gateway is in the mesh and
+#      performs mTLS to the gitlab/coder workloads, so the secured hop still
+#      happens, just at the gateway instead of from this namespace.
+#
+# The explicit `istio-injection: disabled` label documents this intent and keeps
+# the namespace out of the mesh even if the cluster ever switches to
+# default-on injection.
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: gitlab-runner
+  labels:
+    app.kubernetes.io/part-of: gitlab-runner
+    istio-injection: disabled

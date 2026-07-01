@@ -1,0 +1,68 @@
+# PodMonitor for the Istio data plane (every istio-proxy: the ingress gateway
+# now, and application sidecars once namespaces are injected).
+#
+# Istio merges Envoy stats and the pilot-agent's own metrics and serves the
+# combined set on the proxy's :15020/stats/prometheus endpoint. Each proxy pod
+# carries the conventional scrape annotations (prometheus.io/scrape=true,
+# prometheus.io/path=/stats/prometheus, prometheus.io/port=15020), so this
+# PodMonitor selects all proxy pods (those NOT opting out via the
+# istio-prometheus-ignore label) and rewrites the scrape target to the merged
+# port using those annotations. This is the official Istio "Prometheus with
+# Operator" data-plane PodMonitor (samples/addons/extras/prometheus-operator
+# at the istio release-1.30 tag); only the labels are adapted: release=kps so
+# the kube-prometheus-stack operator selects it, matching the other monitors in
+# deploy/observability.
+#
+# It populates istio_requests_total, istio_tcp_*, and the rest of the Istio
+# standard metrics that Kiali and the Istio Service/Workload/Mesh Grafana
+# dashboards read. With no app namespaces injected yet, the only proxy is the
+# ingress gateway, so traffic through the gateway is what currently shows up.
+apiVersion: monitoring.coreos.com/v1
+kind: PodMonitor
+metadata:
+  name: envoy-stats-monitor
+  namespace: istio-system
+  labels:
+    monitoring: istio-proxies
+    release: kps
+    app.kubernetes.io/part-of: <CLUSTER_NAME>
+spec:
+  selector:
+    matchExpressions:
+      - { key: istio-prometheus-ignore, operator: DoesNotExist }
+  namespaceSelector:
+    any: true
+  jobLabel: envoy-stats
+  podMetricsEndpoints:
+    - path: /stats/prometheus
+      interval: 15s
+      relabelings:
+        - action: keep
+          sourceLabels: [__meta_kubernetes_pod_container_name]
+          regex: "istio-proxy"
+        - action: keep
+          sourceLabels: [__meta_kubernetes_pod_annotationpresent_prometheus_io_scrape]
+        # IPv6 pod IPs: bracket the address.
+        - action: replace
+          regex: (\d+);(([A-Fa-f0-9]{1,4}::?){1,7}[A-Fa-f0-9]{1,4})
+          replacement: '[$2]:$1'
+          sourceLabels:
+            - __meta_kubernetes_pod_annotation_prometheus_io_port
+            - __meta_kubernetes_pod_ip
+          targetLabel: __address__
+        # IPv4 pod IPs.
+        - action: replace
+          regex: (\d+);((([0-9]+?)(\.|$)){4})
+          replacement: $2:$1
+          sourceLabels:
+            - __meta_kubernetes_pod_annotation_prometheus_io_port
+            - __meta_kubernetes_pod_ip
+          targetLabel: __address__
+        - action: labeldrop
+          regex: "__meta_kubernetes_pod_label_(.+)"
+        - sourceLabels: [__meta_kubernetes_namespace]
+          action: replace
+          targetLabel: namespace
+        - sourceLabels: [__meta_kubernetes_pod_name]
+          action: replace
+          targetLabel: pod

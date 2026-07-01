@@ -1,0 +1,39 @@
+# ingress-nginx values for standard EKS with the AWS Load Balancer Controller.
+#
+# The AWS Load Balancer Controller provisions an internet-facing NLB for the
+# controller's type: LoadBalancer Service (opted in via
+# aws-load-balancer-type: external). The NLB terminates TLS using the single ACM
+# cert (ssl-cert + ssl-ports=443) and forwards decrypted TCP to the controller's
+# plain HTTP port, so backends are HTTP and every app Ingress uses
+# ingressClassName: nginx. Public subnets are auto-discovered via the
+# kubernetes.io/role/elb=1 tag.
+controller:
+  replicaCount: 2
+  service:
+    type: LoadBalancer
+    annotations:
+      service.beta.kubernetes.io/aws-load-balancer-type: external
+      service.beta.kubernetes.io/aws-load-balancer-scheme: internet-facing
+      service.beta.kubernetes.io/aws-load-balancer-nlb-target-type: ip
+      service.beta.kubernetes.io/aws-load-balancer-ssl-cert: "arn:aws-us-gov:acm:us-gov-west-1:<ACCOUNT_ID>:certificate/<ACM_CERT_UUID>"
+      service.beta.kubernetes.io/aws-load-balancer-ssl-ports: "443"
+      service.beta.kubernetes.io/aws-load-balancer-backend-protocol: tcp
+      service.beta.kubernetes.io/aws-load-balancer-cross-zone-load-balancing-enabled: "true"
+    # TLS terminates at the NLB; forward the 443 listener to the controller's
+    # plain HTTP container port.
+    targetPorts:
+      http: http
+      https: http
+  config:
+    # The L4 NLB does not add X-Forwarded-Proto, so disable nginx's own
+    # redirect to avoid http->https loops; clients reach the stack over 443.
+    use-forwarded-headers: "true"
+    ssl-redirect: "false"
+    # Coder workspace apps and terminals need websockets and large bodies.
+    proxy-body-size: "0"
+    proxy-read-timeout: "3600"
+    proxy-send-timeout: "3600"
+  ingressClassResource:
+    name: nginx
+    default: false
+  allowSnippetAnnotations: false

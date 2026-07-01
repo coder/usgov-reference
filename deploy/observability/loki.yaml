@@ -1,0 +1,239 @@
+# Grafana Loki, single-binary (monolithic) mode, for the GovCloud demo.
+#
+# Scope: the in-cluster log store for the `monitoring` observability stack.
+# Promtail (deploy/observability/promtail.yaml) pushes node-level pod logs here,
+# and Grafana queries it through the `loki` datasource
+# (deploy/observability/loki-datasource.yaml).
+#
+# Design choices for GovCloud + a lean demo:
+#   - The image is pulled from the private ECR mirror (no pull-through cache in
+#     GovCloud). Tag matches scripts/images.txt (grafana/loki:3.5.9).
+#   - Single process running every Loki target (default `-target=all`), an
+#     in-memory ring with replication_factor 1, and filesystem object storage on
+#     a modest gp3 PVC. No object store, no microservices, no cache services.
+#   - tsdb shipper with schema v13, ~168h (7d) retention enforced by the
+#     compactor. auth_enabled is false (single tenant, in-cluster only).
+#   - The Deployment uses the Recreate strategy because the chunk/index data
+#     lives on a single ReadWriteOnce volume that only one pod may attach.
+#   - A ServiceMonitor scrapes Loki's own /metrics so the status dashboard's
+#     "Loki" panel reflects a real, scraped target.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: loki-config
+  namespace: monitoring
+  labels:
+    app.kubernetes.io/name: loki
+    app.kubernetes.io/part-of: <CLUSTER_NAME>
+    app.kubernetes.io/component: logging
+data:
+  config.yaml: |-
+    auth_enabled: false
+
+    server:
+      http_listen_port: 3100
+      grpc_listen_port: 9095
+      log_level: info
+      # Allow larger log lines and query payloads than the conservative
+      # defaults; harmless for a low-volume demo.
+      grpc_server_max_recv_msg_size: 16777216
+      grpc_server_max_send_msg_size: 16777216
+
+    common:
+      instance_addr: 127.0.0.1
+      path_prefix: /loki
+      replication_factor: 1
+      ring:
+        kvstore:
+          store: inmemory
+      storage:
+        filesystem:
+          chunks_directory: /loki/chunks
+          rules_directory: /loki/rules
+
+    schema_config:
+      configs:
+        - from: 2024-01-01
+          store: tsdb
+          object_store: filesystem
+          schema: v13
+          index:
+            prefix: index_
+            period: 24h
+
+    storage_config:
+      tsdb_shipper:
+        active_index_directory: /loki/tsdb-index
+        cache_location: /loki/tsdb-cache
+      filesystem:
+        directory: /loki/chunks
+
+    compactor:
+      working_directory: /loki/compactor
+      retention_enabled: true
+      delete_request_store: filesystem
+
+    limits_config:
+      retention_period: 168h
+      reject_old_samples: true
+      reject_old_samples_max_age: 168h
+      volume_enabled: true
+      max_query_series: 10000
+
+    query_range:
+      results_cache:
+        cache:
+          embedded_cache:
+            enabled: true
+            max_size_mb: 100
+
+    ruler:
+      storage:
+        type: local
+        local:
+          directory: /loki/rules
+
+    # Air-gapped: never phone home with usage analytics.
+    analytics:
+      reporting_enabled: false
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: loki-data
+  namespace: monitoring
+  labels:
+    app.kubernetes.io/name: loki
+    app.kubernetes.io/part-of: <CLUSTER_NAME>
+    app.kubernetes.io/component: logging
+spec:
+  accessModes:
+    - ReadWriteOnce
+  storageClassName: gp3
+  resources:
+    requests:
+      storage: 10Gi
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: loki
+  namespace: monitoring
+  labels:
+    app.kubernetes.io/name: loki
+    app.kubernetes.io/part-of: <CLUSTER_NAME>
+    app.kubernetes.io/component: logging
+spec:
+  type: ClusterIP
+  selector:
+    app.kubernetes.io/name: loki
+  ports:
+    - name: http
+      port: 3100
+      targetPort: http
+      protocol: TCP
+    - name: grpc
+      port: 9095
+      targetPort: grpc
+      protocol: TCP
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: loki
+  namespace: monitoring
+  labels:
+    app.kubernetes.io/name: loki
+    app.kubernetes.io/part-of: <CLUSTER_NAME>
+    app.kubernetes.io/component: logging
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: loki
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: loki
+        app.kubernetes.io/part-of: <CLUSTER_NAME>
+        app.kubernetes.io/component: logging
+      annotations:
+        # Roll the pod when the rendered config changes.
+        checksum/config: loki-config-v1
+    spec:
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10001
+        runAsGroup: 10001
+        fsGroup: 10001
+      containers:
+        - name: loki
+          image: <ACCOUNT_ID>.dkr.ecr.us-gov-west-1.amazonaws.com/docker-hub/grafana/loki:3.5.9
+          imagePullPolicy: IfNotPresent
+          args:
+            - -config.file=/etc/loki/config.yaml
+          ports:
+            - name: http
+              containerPort: 3100
+              protocol: TCP
+            - name: grpc
+              containerPort: 9095
+              protocol: TCP
+          readinessProbe:
+            httpGet:
+              path: /ready
+              port: http
+            initialDelaySeconds: 30
+            periodSeconds: 10
+            timeoutSeconds: 5
+            failureThreshold: 6
+          livenessProbe:
+            httpGet:
+              path: /ready
+              port: http
+            initialDelaySeconds: 45
+            periodSeconds: 30
+            timeoutSeconds: 5
+            failureThreshold: 6
+          resources:
+            requests:
+              cpu: 100m
+              memory: 256Mi
+            limits:
+              memory: 512Mi
+          volumeMounts:
+            - name: config
+              mountPath: /etc/loki
+            - name: data
+              mountPath: /loki
+      volumes:
+        - name: config
+          configMap:
+            name: loki-config
+        - name: data
+          persistentVolumeClaim:
+            claimName: loki-data
+---
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: loki
+  namespace: monitoring
+  labels:
+    app.kubernetes.io/name: loki
+    app.kubernetes.io/component: logging
+    release: kps
+spec:
+  namespaceSelector:
+    matchNames:
+      - monitoring
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: loki
+  endpoints:
+    - port: http
+      path: /metrics
+      interval: 30s
+      scheme: http

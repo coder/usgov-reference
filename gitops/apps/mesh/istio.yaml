@@ -1,0 +1,68 @@
+# Application: istio (PLACEHOLDER - DO NOT SYNC)
+#
+# =====================================================================
+# CRITICAL: THIS APPLICATION MUST REMAIN UNSYNCED
+# =====================================================================
+#
+# This is a placeholder Application for the Istio service mesh. Do NOT
+# sync it until a full Istio adoption design is completed and reviewed.
+# Syncing without a complete design risks re-provisioning the primary
+# internet-facing NLB (owned by the istio-ingressgateway Service) and
+# causing an outage for all primary hostnames (*.<BASE_DOMAIN>).
+#
+# REQUIRED DESIGN DECISIONS before enabling sync:
+#   1. Choose the target install model: istioctl (IstioOperator file),
+#      Helm base/istiod/gateway charts, or Sail Operator. Each has
+#      different CRD handling, upgrade paths, and drift risk.
+#   2. Plan CRD adoption for all live Istio CRDs (VirtualService,
+#      Gateway, DestinationRule, AuthorizationPolicy, PeerAuthentication,
+#      etc.). A phased adoption plan with ServerSideApply=true is required
+#      before the first sync.
+#   3. Audit the istio-ingressgateway Service annotations (ACM cert ARN,
+#      scheme, ssl-ports) before re-applying. Re-applying the Service spec
+#      without preserving all annotations risks NLB re-provisioning.
+#   4. Adopt or re-install Kiali as part of the Istio adoption plan.
+#   5. The deploy/istio/ tree (gateway/, security/, observability/) covers
+#      VirtualServices, PeerAuthentications, EnvoyFilters, and observability
+#      wiring. All require an ordered sync-wave strategy.
+#
+# This Application is a TRACKING PLACEHOLDER only. Source points at the
+# IstioOperator manifest used for the original install, for reference.
+# The gateway/, security/, and observability/ sub-trees are not managed
+# here; they require a separate ordered design.
+#
+# Manual sync only; prune and selfHeal are OFF.
+# NO metadata.finalizers.
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: istio
+  namespace: argocd
+spec:
+  project: platform
+
+  source:
+    repoURL: "http://gitlab.gitlab.svc.cluster.local/<GITLAB_GROUP>/<CLUSTER_NAME>.git"
+    targetRevision: main
+    # Points at the top-level istio-operator.yaml used for the original
+    # istioctl install. Sub-trees (gateway/, security/, observability/)
+    # are excluded until the Istio adoption design is finalised.
+    path: deploy/istio
+    directory:
+      recurse: false
+      include: "istio-operator.yaml"
+
+  destination:
+    server: "https://kubernetes.default.svc"
+    namespace: istio-system
+
+  syncPolicy:
+    # Manual sync only; prune and selfHeal are OFF.
+    # THIS APPLICATION MUST REMAIN UNSYNCED. See file header for required
+    # design decisions before enabling sync.
+    syncOptions:
+      - CreateNamespace=true
+      # ServerSideApply is required for Istio CRD adoption when sync is
+      # eventually enabled. Listed here as a reminder; has no effect while
+      # the Application is unsynced.
+      - ServerSideApply=true

@@ -1,0 +1,57 @@
+# terraform/terraform.tfvars.example
+#
+# Copy this file to terraform.tfvars (which is .gitignore'd), fill in every
+# <PLACEHOLDER>, and run `terraform plan` from this directory.
+#
+# Values here override the defaults in variables.tf.  Only the variables a
+# forker MUST change are listed; optional overrides are commented out.
+#
+# S3 backend (backend.tf) does not support variable interpolation.
+# Before running `terraform init`, edit backend.tf directly:
+#   bucket         = "<CLUSTER_NAME>-tfstate-<ACCOUNT_ID>"
+#   dynamodb_table = "<CLUSTER_NAME>-tflock"
+# where <CLUSTER_NAME> and <ACCOUNT_ID> are the values you set below.
+
+# -----------------------------------------------------------------------
+# Required overrides
+# -----------------------------------------------------------------------
+
+# Short name for this EKS cluster and all derived AWS resource names.
+# Matches cluster.name in values/env.example.yaml.
+cluster_name = "<CLUSTER_NAME>"
+
+# Fully-qualified base domain delegated to this GovCloud account.
+# Matches dns.base_domain in values/env.example.yaml.
+domain = "<BASE_DOMAIN>"
+
+# Route53 hosted-zone ID for the base domain (already created).
+# Matches dns.route53_zone_id in values/env.example.yaml.
+route53_zone_id = "<ROUTE53_ZONE_ID>"
+
+# ARN of an issued ACM certificate covering <BASE_DOMAIN> and *.<BASE_DOMAIN>.
+# Matches tls.acm_certificate_arn in values/env.example.yaml.
+acm_certificate_arn = "arn:aws-us-gov:acm:us-gov-west-1:<ACCOUNT_ID>:certificate/<ACM_CERT_UUID>"
+
+# -----------------------------------------------------------------------
+# Optional overrides (defaults from variables.tf are shown)
+# -----------------------------------------------------------------------
+
+# GovCloud deployment region.  Change only if targeting us-gov-east-1.
+# region = "us-gov-west-1"
+
+# VPC CIDR block.
+# vpc_cidr = "10.0.0.0/16"
+
+# Bedrock cross-region inference profile for the AI gateway allowlist.
+# Run `aws bedrock list-inference-profiles --region us-gov-west-1` to list
+# available profiles in the account.
+# bedrock_inference_profile = "us-gov.anthropic.claude-sonnet-4-5-20250929-v1:0"
+
+# EKS Kubernetes version.  Must be supported in GovCloud.
+# kubernetes_version = "1.36"
+
+# RDS PostgreSQL engine version.
+# postgres_version = "18.4"
+
+# RDS instance class.
+# db_instance_class = "db.m6g.large"

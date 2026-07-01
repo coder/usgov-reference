@@ -1,0 +1,63 @@
+# Application: observability-extras
+#
+# Applies the supplementary observability manifests in deploy/observability/
+# that are NOT shipped by the kube-prometheus-stack Helm chart (managed by
+# the monitoring Application in this directory). Manifests covered:
+#
+#   loki.yaml              - Loki monolithic Deployment, PVC, Service,
+#                            ServiceMonitor (log store)
+#   promtail.yaml          - Promtail DaemonSet (node-level log collector)
+#   grafana-ingress.yaml   - Ingress for Grafana at grafana.<BASE_DOMAIN>
+#   coder-metrics.yaml     - Headless Service + ServiceMonitor for Coder
+#                            metrics endpoint (:2112)
+#   dashboards-*.yaml      - Grafana dashboard ConfigMaps (coder, boundary,
+#                            ai-bridge, prebuilds, provisionerd, etc.)
+#   datasource-*.yaml      - Grafana datasource ConfigMaps
+#   loki-datasource.yaml   - Loki Grafana datasource ConfigMap
+#
+# deploy/observability/namespace.yaml is EXCLUDED: the monitoring Namespace
+# is managed by the platform/namespaces Application. Dual ownership of the
+# same Namespace object would cause an Argo conflict on sync.
+#
+# deploy/observability/scripts/ and deploy/observability/sql/ contain shell
+# scripts and SQL; they are not K8s manifests and are not picked up by the
+# *.yaml include pattern.
+#
+# Sync ordering: sync the monitoring Application (kube-prometheus-stack)
+# first so that the Prometheus operator CRDs (ServiceMonitor, PodMonitor)
+# and the kps-grafana Deployment exist before this Application is synced.
+#
+# deploy/istio/observability/ (Istio dashboards, kiali manifests, Istio
+# ServiceMonitors) is NOT included here; those are covered by the
+# placeholder mesh/istio Application once the Istio adoption design is done.
+#
+# Manual sync only; prune and selfHeal are OFF.
+# NO metadata.finalizers.
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: observability-extras
+  namespace: argocd
+spec:
+  project: platform
+
+  source:
+    repoURL: "http://gitlab.gitlab.svc.cluster.local/<GITLAB_GROUP>/<CLUSTER_NAME>.git"
+    targetRevision: main
+    path: deploy/observability
+    directory:
+      recurse: false
+      # All YAML files in the directory root except namespace.yaml.
+      # namespace.yaml is owned by platform/namespaces; excluding it here
+      # prevents dual ownership.
+      include: "*.yaml"
+      exclude: "namespace.yaml"
+
+  destination:
+    server: "https://kubernetes.default.svc"
+    namespace: monitoring
+
+  syncPolicy:
+    # Manual sync only; prune and selfHeal are OFF.
+    syncOptions:
+      - CreateNamespace=true

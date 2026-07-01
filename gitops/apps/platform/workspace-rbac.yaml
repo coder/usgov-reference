@@ -1,0 +1,36 @@
+# Application: workspace-rbac
+#
+# Manages the Role and RoleBinding for Coder workspace permissions in the
+# coder-workspaces namespace (deploy/platform/workspace-rbac.yaml).
+#
+# Note: the Coder Helm chart creates a same-named Role in the coder
+# namespace; those are separate objects managed by the coder Application.
+# Keeping workspace-rbac in its own Application prevents the two
+# coder-workspace-perms Roles from colliding under a single Argo owner.
+#
+# Manual sync only; prune and selfHeal are OFF.
+# NO metadata.finalizers.
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: workspace-rbac
+  namespace: argocd
+spec:
+  project: platform
+
+  source:
+    repoURL: "http://gitlab.gitlab.svc.cluster.local/<GITLAB_GROUP>/<CLUSTER_NAME>.git"
+    targetRevision: main
+    path: deploy/platform
+    directory:
+      recurse: false
+      include: "workspace-rbac.yaml"
+
+  destination:
+    server: "https://kubernetes.default.svc"
+    namespace: coder-workspaces
+
+  syncPolicy:
+    # Manual sync only; prune and selfHeal are OFF.
+    syncOptions:
+      - CreateNamespace=true

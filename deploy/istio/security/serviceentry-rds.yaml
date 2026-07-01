@@ -1,0 +1,31 @@
+# Mesh-external registration for RDS PostgreSQL.
+#
+# The coder and keycloak workloads (and any other meshed app using the shared
+# instance) connect out of the mesh to the RDS endpoint. The connection is
+# already TLS at the application layer: the instance enforces rds.force_ssl=1 and
+# the apps connect with sslmode=require. This ServiceEntry simply makes that
+# external endpoint a known member of the mesh registry so the destination is
+# explicit and so a future switch to outboundTrafficPolicy: REGISTRY_ONLY keeps
+# working. Pair it with destinationrule-rds.yaml (TLS mode DISABLE) so the
+# sidecar passes the app-originated TLS straight through.
+#
+# Set the host to the RDS endpoint retrieved via: terraform -chdir=terraform output -raw rds_endpoint
+apiVersion: networking.istio.io/v1
+kind: ServiceEntry
+metadata:
+  name: rds-postgres
+  namespace: istio-system
+  labels:
+    app.kubernetes.io/part-of: <CLUSTER_NAME>
+spec:
+  # Exported to all namespaces so every meshed app shares one registration.
+  exportTo:
+    - "*"
+  hosts:
+    - <RDS_ENDPOINT_HOST>
+  location: MESH_EXTERNAL
+  resolution: DNS
+  ports:
+    - number: 5432
+      name: tcp-postgres
+      protocol: TCP

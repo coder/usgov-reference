@@ -1,0 +1,27 @@
+---
+# ClusterIP service fronting the GitLab pod. ingress-nginx routes to this on :80.
+# Also the StatefulSet's governing service (serviceName: gitlab).
+apiVersion: v1
+kind: Service
+metadata:
+  name: gitlab
+  namespace: gitlab
+  labels:
+    app: gitlab
+spec:
+  type: ClusterIP
+  selector:
+    app: gitlab
+  ports:
+    - name: http
+      port: 80
+      targetPort: http
+      protocol: TCP
+    # Container Registry vhost (bundled registry NGINX on :5050). Reached
+    # externally at https://registry.<BASE_DOMAIN> via the Istio gateway
+    # (see virtualservice-registry.yaml). The port name http-registry lets the
+    # mesh treat it as HTTP for VirtualService routing.
+    - name: http-registry
+      port: 5050
+      targetPort: http-registry
+      protocol: TCP

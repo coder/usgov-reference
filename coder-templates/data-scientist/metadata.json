@@ -1,0 +1,6 @@
+{
+  "display_name": "Data Scientist",
+  "description": "Data science workspace: Python 3, JupyterLab, pip/venv. Use for notebooks, data analysis, and ML prototyping.",
+  "icon": "/icon/python.svg",
+  "slug": "data-scientist"
+}

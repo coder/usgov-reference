@@ -1,0 +1,59 @@
+# Application: monitoring (kube-prometheus-stack)
+#
+# Manages the kube-prometheus-stack Helm release (chart 86.2.0, release
+# name `kps`, appVersion v0.91.0).
+# Uses Argo CD multi-source: chart from the prometheus-community repo plus
+# values from this git repo via the $values reference.
+#
+# ServerSideApply=true is required: kube-prometheus-stack ships many large
+# Prometheus operator CRDs (PrometheusRule, ServiceMonitor, PodMonitor,
+# Prometheus, Alertmanager, etc.) that exceed the client-side
+# last-applied-configuration annotation size limit. SSA avoids apply
+# failures and is required on future upgrades.
+#
+# NEVER prune CRDs: removing a Prometheus operator CRD cascades to all
+# PrometheusRule, ServiceMonitor, and PodMonitor objects across the cluster,
+# including those created by loki.yaml, promtail.yaml, and coder-metrics.yaml.
+# The absence of an automated block guarantees prune stays OFF.
+#
+# Supplementary observability manifests (Loki, Promtail, Grafana Ingress,
+# Coder metrics, dashboards, datasources) are NOT part of this chart and
+# are managed by the separate observability-extras Application.
+#
+# Manual sync only; prune and selfHeal are OFF.
+# NO metadata.finalizers.
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: monitoring
+  namespace: argocd
+spec:
+  project: platform
+
+  sources:
+    - repoURL: "https://prometheus-community.github.io/helm-charts"
+      chart: kube-prometheus-stack
+      targetRevision: "86.2.0"
+      helm:
+        releaseName: kps
+        valueFiles:
+          - "$values/deploy/observability/kube-prometheus-stack-values.yaml"
+
+    - repoURL: "http://gitlab.gitlab.svc.cluster.local/<GITLAB_GROUP>/<CLUSTER_NAME>.git"
+      targetRevision: main
+      ref: values
+
+  destination:
+    server: "https://kubernetes.default.svc"
+    namespace: monitoring
+
+  syncPolicy:
+    # Manual sync only; prune and selfHeal are OFF.
+    syncOptions:
+      - CreateNamespace=true
+      # ServerSideApply for CRD-bearing chart (Prometheus operator CRDs
+      # exceed the client-side annotation limit). Replace=false is implied:
+      # SSA patches, never replaces existing objects.
+      # NEVER prune CRDs: loss of a Prometheus operator CRD cascades to all
+      # PrometheusRule/ServiceMonitor/PodMonitor objects cluster-wide.
+      - ServerSideApply=true

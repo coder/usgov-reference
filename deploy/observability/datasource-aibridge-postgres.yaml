@@ -1,0 +1,58 @@
+# Grafana datasource for the Coder database (AI Gateway drill-downs), READ-ONLY.
+#
+# The kube-prometheus-stack Grafana runs the kiwigrid sidecar with
+# `sidecar.datasources.enabled: true` and `RESOURCE=both`, so it provisions any
+# ConfigMap (or Secret) labelled `grafana_datasource: "1"` as a Grafana
+# datasource. Adding this ConfigMap is enough; no Helm upgrade is required.
+#
+# Why a Postgres datasource: the live AI Gateway (AI Bridge) exposes only
+# provider-health gauges to Prometheus (coder_aibridged_*), and Loki carries
+# only lifecycle log lines. Per-interception, per-session, token, and cost data
+# live exclusively in the Coder database (aibridge_interceptions,
+# aibridge_token_usages, aibridge_user_prompts, aibridge_tool_usages,
+# boundary_sessions, ai_model_prices). The AI Governance dashboard's
+# Usage & Cost and Intercepts & Sessions drill-downs query this datasource.
+#
+# Security:
+#   - The datasource authenticates as the dedicated, least-privilege Postgres
+#     role `grafana_ro` (LOGIN, no superuser, no CREATEROLE) with SELECT on only
+#     the AI Gateway / Agent Firewall tables plus users and workspace_agents for
+#     joins. See deploy/observability/sql/aibridge-grafana-ro.sql and
+#     deploy/observability/scripts/setup-aibridge-db-datasource.sh.
+#   - The password is NOT in git. Grafana expands ${AIGOV_DB_PASSWORD} from an
+#     environment variable injected into the Grafana container from the
+#     Kubernetes Secret `aigov-grafana-db` (see kube-prometheus-stack-values.yaml,
+#     grafana.envValueFrom). `editable: false` keeps the datasource config locked.
+#   - `isDefault` stays false so Prometheus remains the default datasource.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: aibridge-postgres-datasource
+  namespace: monitoring
+  labels:
+    grafana_datasource: "1"
+    app.kubernetes.io/name: aibridge-postgres
+    app.kubernetes.io/part-of: <CLUSTER_NAME>
+    app.kubernetes.io/component: grafana-datasource
+data:
+  aibridge-postgres-datasource.yaml: |-
+    apiVersion: 1
+    datasources:
+      - name: AI Gateway DB
+        type: postgres
+        uid: aibridge-postgres
+        access: proxy
+        url: <RDS_ENDPOINT_HOST>:5432
+        user: grafana_ro
+        isDefault: false
+        editable: false
+        jsonData:
+          database: coder
+          sslmode: require
+          postgresVersion: 1500
+          maxOpenConns: 5
+          maxIdleConns: 2
+          connMaxLifetime: 14400
+          timescaledb: false
+        secureJsonData:
+          password: ${AIGOV_DB_PASSWORD}

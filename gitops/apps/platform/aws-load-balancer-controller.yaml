@@ -1,0 +1,54 @@
+# Application: aws-load-balancer-controller
+#
+# Manages the aws-load-balancer-controller Helm release (chart 3.4.0).
+# Uses Argo CD multi-source: chart from the eks-charts Helm repo plus
+# values from this git repo via the $values reference.
+#
+# GovCloud image note: the chart-default image is hosted on public.ecr.aws,
+# which is not reachable from a GovCloud VPC without internet egress. Set
+# image.repository in the values file to the private ECR mirror path before
+# syncing this Application. See scripts/images.txt for the mirror mapping.
+#
+# This Application actively reconciles the ingress-nginx NLB via
+# TargetGroupBinding and IngressClassParams CRDs. Sync it before or
+# together with the ingress-nginx Application.
+#
+# ServerSideApply=true is required: the CRDs (TargetGroupBinding,
+# IngressClassParams) exceed the client-side last-applied-configuration
+# annotation size limit. Replace=false always (never recreate; only patch).
+#
+# Manual sync only; prune and selfHeal are OFF.
+# NO metadata.finalizers.
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: aws-load-balancer-controller
+  namespace: argocd
+spec:
+  project: platform
+
+  sources:
+    - repoURL: "https://aws.github.io/eks-charts"
+      chart: aws-load-balancer-controller
+      targetRevision: "3.4.0"
+      helm:
+        releaseName: aws-load-balancer-controller
+        valueFiles:
+          - "$values/deploy/platform/aws-load-balancer-controller-values.yaml"
+
+    - repoURL: "http://gitlab.gitlab.svc.cluster.local/<GITLAB_GROUP>/<CLUSTER_NAME>.git"
+      targetRevision: main
+      ref: values
+
+  destination:
+    server: "https://kubernetes.default.svc"
+    namespace: kube-system
+
+  syncPolicy:
+    # Manual sync only; prune and selfHeal are OFF.
+    syncOptions:
+      - CreateNamespace=true
+      # ServerSideApply for CRD-bearing chart (CRDs exceed client-side
+      # annotation limit). Replace=false is implied: SSA patches, never
+      # replaces existing objects.
+      - ServerSideApply=true

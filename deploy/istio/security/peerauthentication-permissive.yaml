@@ -1,0 +1,21 @@
+# Mesh-wide PeerAuthentication: PERMISSIVE (the rollout default).
+#
+# PERMISSIVE makes every injected sidecar accept BOTH mTLS and plain text on its
+# inbound ports. This is what makes namespace-by-namespace sidecar injection
+# safe: a meshed pod still answers non-meshed callers while the rollout is in
+# progress. Apply this BEFORE injecting any namespace, then flip to STRICT
+# (peerauthentication-strict.yaml) only after every app namespace is injected
+# and validated.
+#
+# Istio's default is already PERMISSIVE; this object exists so the rollout has a
+# single, explicit policy to flip later, and so the intended state is in git.
+apiVersion: security.istio.io/v1
+kind: PeerAuthentication
+metadata:
+  name: default
+  namespace: istio-system
+  labels:
+    app.kubernetes.io/part-of: <CLUSTER_NAME>
+spec:
+  mtls:
+    mode: PERMISSIVE

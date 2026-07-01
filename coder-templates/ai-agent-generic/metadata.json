@@ -1,0 +1,6 @@
+{
+  "display_name": "Generic Agent Runtime",
+  "description": "Generic agent runtime: plain compute, no LLM tooling. Default for server-side Coder Agents tasks not language-specific.",
+  "icon": "/icon/coder.svg",
+  "slug": "ai-agent-generic"
+}

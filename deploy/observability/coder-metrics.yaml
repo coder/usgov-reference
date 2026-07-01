@@ -1,0 +1,57 @@
+# Scrape path for the Coder control plane's Prometheus metrics.
+#
+# The Coder Helm chart's own Service only exposes the HTTP app port (80 -> 8080)
+# and has no metrics port. coderd serves Prometheus metrics on :2112 (enabled by
+# CODER_PROMETHEUS_ENABLE + CODER_PROMETHEUS_ADDRESS=0.0.0.0:2112 in
+# deploy/coder/values.yaml). This headless Service exposes that port for the
+# control-plane pod only, and the ServiceMonitor below tells the in-cluster
+# Prometheus to scrape it. Prometheus adds `namespace` and `pod` target labels,
+# which the Coder dashboards filter on (namespace `coder`, pod `coder.*`).
+apiVersion: v1
+kind: Service
+metadata:
+  name: coder-metrics
+  namespace: coder
+  labels:
+    app.kubernetes.io/name: coder
+    app.kubernetes.io/part-of: coder
+    app.kubernetes.io/component: metrics
+spec:
+  type: ClusterIP
+  clusterIP: None
+  # Select only the Coder control-plane pod. The external provisioner pods do
+  # not carry app.kubernetes.io/name=coder, so they are excluded (they do not
+  # serve :2112).
+  selector:
+    app.kubernetes.io/instance: coder
+    app.kubernetes.io/name: coder
+  ports:
+    - name: metrics
+      port: 2112
+      targetPort: 2112
+      protocol: TCP
+---
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: coder
+  namespace: coder
+  labels:
+    app.kubernetes.io/name: coder
+    app.kubernetes.io/component: metrics
+    # Belt-and-suspenders: the stack also selects ServiceMonitors regardless of
+    # this label (serviceMonitorSelectorNilUsesHelmValues: false).
+    release: kps
+spec:
+  namespaceSelector:
+    matchNames:
+      - coder
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: coder
+      app.kubernetes.io/component: metrics
+  endpoints:
+    - port: metrics
+      path: /metrics
+      interval: 30s
+      scheme: http

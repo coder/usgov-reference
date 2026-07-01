@@ -1,0 +1,6 @@
+{
+  "display_name": "Platform Engineer",
+  "description": "Platform/DevOps workspace: kubectl, Helm, Terraform, AWS CLI, jq. Use for IaC, Kubernetes ops, and cloud platform work.",
+  "icon": "/icon/kubernetes.svg",
+  "slug": "platform-engineer"
+}

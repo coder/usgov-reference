@@ -1,0 +1,6 @@
+{
+  "display_name": "Java Engineer",
+  "description": "Java/JVM workspace: OpenJDK 21, Maven, Gradle. Use for Java and Kotlin services, Spring Boot apps, and JVM build tooling.",
+  "icon": "/icon/java.svg",
+  "slug": "java-engineer"
+}

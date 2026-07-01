@@ -1,0 +1,27 @@
+# Mesh-wide PeerAuthentication: STRICT (the FINAL state).
+#
+# DO NOT APPLY until every app namespace intended for the mesh is injected and
+# validated under PERMISSIVE. Applying this is the cutover that requires all
+# sidecar-to-sidecar traffic to be mTLS; any remaining plain-text path between
+# two meshed pods is rejected the moment this lands.
+#
+# This replaces the PERMISSIVE policy of the same name/namespace (apply this file
+# in place of peerauthentication-permissive.yaml). Roll back instantly by
+# re-applying peerauthentication-permissive.yaml.
+#
+# STRICT only governs INBOUND traffic to injected workloads. It does not affect:
+#   - non-injected namespaces (kube-system, external-secrets, default, and,
+#     initially, monitoring and coder-workspaces). See namespace-injection.md.
+#   - kubelet HTTP probes (handled by Istio probe rewrite, on by default).
+#   - mesh-external egress such as RDS (governed by the ServiceEntry +
+#     DestinationRule in this directory, not by PeerAuthentication).
+apiVersion: security.istio.io/v1
+kind: PeerAuthentication
+metadata:
+  name: default
+  namespace: istio-system
+  labels:
+    app.kubernetes.io/part-of: <CLUSTER_NAME>
+spec:
+  mtls:
+    mode: STRICT

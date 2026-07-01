@@ -1,0 +1,38 @@
+# Keycloak route. THIS IS THE KEYCLOAK COOKIE FIX.
+#
+# Root cause (issue #30): the L4 NLB terminates TLS and forwards plain HTTP, so
+# Keycloak saw X-Forwarded-Proto: http and issued AUTH_SESSION_ID / KC_RESTART
+# without Secure or SameSite=None. The Account Console silent SSO iframe needs
+# SameSite=None; Secure cookies, so the browser dropped them.
+#
+# The gateway deterministically presents X-Forwarded-Proto: https to Keycloak.
+# Combined with the pod's existing KC_PROXY_HEADERS=xforwarded, Keycloak now
+# treats the request as secure and sets Secure; SameSite=None on session
+# cookies. KC_HOSTNAME=https://auth.<BASE_DOMAIN> still pins issuer/redirect
+# URLs; the two settings are independent and both required.
+#
+# Acceptance: curl -D - against the login path through the gateway shows Secure
+# and SameSite=None on the session cookies, and the Account Console loads.
+apiVersion: networking.istio.io/v1
+kind: VirtualService
+metadata:
+  name: keycloak
+  namespace: keycloak
+  labels:
+    app.kubernetes.io/part-of: <CLUSTER_NAME>
+spec:
+  hosts:
+    - "auth.<BASE_DOMAIN>"
+  gateways:
+    - istio-system/public-gateway
+  http:
+    - headers:
+        request:
+          set:
+            # Required for the cookie Secure decision. Do not remove.
+            x-forwarded-proto: "https"
+      route:
+        - destination:
+            host: keycloak.keycloak.svc.cluster.local
+            port:
+              number: 8080

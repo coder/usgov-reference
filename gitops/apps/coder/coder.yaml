@@ -1,0 +1,44 @@
+# Application: coder
+#
+# Manages the Coder Helm release (chart 2.34.1).
+# Uses Argo CD multi-source: chart from helm.coder.com/v2 plus values
+# from this git repo via the $values reference.
+#
+# The coder ServiceAccount carries a Bedrock IRSA annotation set by
+# the values file; preserve it on adoption (annotation tracking avoids
+# touching it).
+#
+# Manual sync only; prune and selfHeal are OFF.
+# NO metadata.finalizers.
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: coder
+  namespace: argocd
+spec:
+  project: apps
+
+  sources:
+    - repoURL: "https://helm.coder.com/v2"
+      chart: coder
+      targetRevision: "2.34.1"
+      helm:
+        releaseName: coder
+        valueFiles:
+          - "$values/deploy/coder/values.yaml"
+
+    - repoURL: "http://gitlab.gitlab.svc.cluster.local/<GITLAB_GROUP>/<CLUSTER_NAME>.git"
+      # In-boundary source: provision the GitLab project and deploy token
+      # (ASM secret surfaced as an ExternalSecret in the argocd namespace)
+      # before syncing this Application.
+      targetRevision: main
+      ref: values
+
+  destination:
+    server: "https://kubernetes.default.svc"
+    namespace: coder
+
+  syncPolicy:
+    # Manual sync only; prune and selfHeal are OFF.
+    syncOptions:
+      - CreateNamespace=true

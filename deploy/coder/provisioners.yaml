@@ -1,0 +1,137 @@
+# =============================================================================
+# Per-organization external provisioner daemons (multi-tenant demo)
+# =============================================================================
+# Each tenant Coder organization (alpha, bravo) needs its own provisioner
+# because built-in provisioners only serve the default organization. These
+# daemons authenticate with an org-scoped provisioner KEY (created out of band,
+# stored in Secret coder-provisioner-<org>, key `key`) so no PSK is shared.
+#
+# They reuse the `coder` ServiceAccount, which already has IRSA plus the
+# workspace RBAC (Roles in `coder` and `coder-workspaces`), so the Terraform
+# kubernetes provider can create workspace pods/PVCs in-cluster. NOTE: reusing
+# one ServiceAccount and one workspace namespace means the tenant boundary here
+# is Coder org/RBAC/provisioner-key isolation, NOT Kubernetes namespace
+# isolation. That is an acceptable demo posture; hard k8s tenancy would need
+# per-org namespaces, ServiceAccounts, and IRSA roles.
+#
+# Connect over the in-cluster Service (plain HTTP) to avoid the NLB hairpin.
+#
+# Create the key + secret first, for example:
+#   coder provisioner keys create alpha-eks --org alpha
+#   kubectl -n coder create secret generic coder-provisioner-alpha \
+#     --from-literal=key=<KEY>
+# (scripts/setup-coder-idp-sync.py documents the org slugs/IDs.)
+# -----------------------------------------------------------------------------
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: coder-provisioner-alpha
+  namespace: coder
+  labels:
+    app.kubernetes.io/name: coder-provisioner
+    app.kubernetes.io/instance: alpha
+    app.kubernetes.io/part-of: coder
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: coder-provisioner
+      app.kubernetes.io/instance: alpha
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: coder-provisioner
+        app.kubernetes.io/instance: alpha
+        app.kubernetes.io/part-of: coder
+    spec:
+      serviceAccountName: coder
+      securityContext:
+        runAsUser: 1000
+        runAsGroup: 1000
+        fsGroup: 1000
+      containers:
+        - name: provisionerd
+          image: "<ACCOUNT_ID>.dkr.ecr.us-gov-west-1.amazonaws.com/ghcr/coder/coder:v2.34.1"
+          imagePullPolicy: IfNotPresent
+          command: ["/opt/coder"]
+          args: ["provisionerd", "start", "--name", "alpha-eks"]
+          env:
+            - name: CODER_URL
+              value: "http://coder.coder.svc.cluster.local"
+            - name: CODER_PROVISIONER_DAEMON_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: coder-provisioner-alpha
+                  key: key
+            - name: CODER_CACHE_DIRECTORY
+              value: "/home/coder/.cache/coder"
+          resources:
+            requests:
+              cpu: "250m"
+              memory: "256Mi"
+            limits:
+              cpu: "2"
+              memory: "1Gi"
+          volumeMounts:
+            - name: home
+              mountPath: /home/coder
+      volumes:
+        - name: home
+          emptyDir: {}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: coder-provisioner-bravo
+  namespace: coder
+  labels:
+    app.kubernetes.io/name: coder-provisioner
+    app.kubernetes.io/instance: bravo
+    app.kubernetes.io/part-of: coder
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: coder-provisioner
+      app.kubernetes.io/instance: bravo
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: coder-provisioner
+        app.kubernetes.io/instance: bravo
+        app.kubernetes.io/part-of: coder
+    spec:
+      serviceAccountName: coder
+      securityContext:
+        runAsUser: 1000
+        runAsGroup: 1000
+        fsGroup: 1000
+      containers:
+        - name: provisionerd
+          image: "<ACCOUNT_ID>.dkr.ecr.us-gov-west-1.amazonaws.com/ghcr/coder/coder:v2.34.1"
+          imagePullPolicy: IfNotPresent
+          command: ["/opt/coder"]
+          args: ["provisionerd", "start", "--name", "bravo-eks"]
+          env:
+            - name: CODER_URL
+              value: "http://coder.coder.svc.cluster.local"
+            - name: CODER_PROVISIONER_DAEMON_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: coder-provisioner-bravo
+                  key: key
+            - name: CODER_CACHE_DIRECTORY
+              value: "/home/coder/.cache/coder"
+          resources:
+            requests:
+              cpu: "250m"
+              memory: "256Mi"
+            limits:
+              cpu: "2"
+              memory: "1Gi"
+          volumeMounts:
+            - name: home
+              mountPath: /home/coder
+      volumes:
+        - name: home
+          emptyDir: {}

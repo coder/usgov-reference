@@ -1,0 +1,82 @@
+# Application: ingress-nginx
+#
+# Manages the ingress-nginx Helm release (chart 4.15.1).
+# Uses Argo CD multi-source: chart from the upstream Helm repo plus values
+# from this git repo via the $values reference.
+#
+# NLB safety rules: the ingress-nginx-controller Service provisions an AWS
+# NLB. A Service recreate re-provisions a NEW NLB with a new hostname,
+# breaking any DNS aliases that point to the old one.
+#
+# Do NOT sync if argocd app diff shows ANY change to:
+#   - Service .spec (type, ports, externalTrafficPolicy, loadBalancerClass,
+#     loadBalancerSourceRanges, allocateLoadBalancerNodePorts)
+#   - Any aws-load-balancer-* annotation on the controller Service
+# A safe diff shows ONLY the argocd.argoproj.io/tracking-id annotation
+# being added and the managed-by label flipping from Helm.
+#
+# ignoreDifferences covers:
+#   - Service .status (mutated by the AWS cloud provider at runtime)
+#   - Fields managed by the aws-load-balancer-controller field manager
+#     (annotations the LB controller writes back to the Service object)
+#
+# ApplyOutOfSyncOnly=true: only apply resources that differ; avoids
+# unnecessary reconcile noise on stable resources.
+#
+# ServerSideApply is NOT set for ingress-nginx: the Service owns a live
+# NLB and client-side apply with Replace=false is the safer path.
+# Sync the aws-load-balancer-controller Application first because it
+# actively reconciles this NLB.
+#
+# Manual sync only; prune and selfHeal are OFF.
+# NO metadata.finalizers.
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: ingress-nginx
+  namespace: argocd
+spec:
+  project: platform
+
+  sources:
+    - repoURL: "https://kubernetes.github.io/ingress-nginx"
+      chart: ingress-nginx
+      targetRevision: "4.15.1"
+      helm:
+        releaseName: ingress-nginx
+        valueFiles:
+          - "$values/deploy/platform/ingress-nginx-values.yaml"
+
+    - repoURL: "http://gitlab.gitlab.svc.cluster.local/<GITLAB_GROUP>/<CLUSTER_NAME>.git"
+      targetRevision: main
+      ref: values
+
+  destination:
+    server: "https://kubernetes.default.svc"
+    namespace: ingress-nginx
+
+  syncPolicy:
+    # Manual sync only; prune and selfHeal are OFF.
+    syncOptions:
+      - CreateNamespace=true
+      # Only apply resources that are out of sync; reduces reconcile noise
+      # on the NLB-backed Service.
+      - ApplyOutOfSyncOnly=true
+
+  # Service .status is mutated by the cloud provider and must not be
+  # diffed. Fields owned by the aws-load-balancer-controller field manager
+  # (LB target-group annotations, health-check annotations) are written
+  # back by the controller and must not be flagged as drift.
+  ignoreDifferences:
+    - group: ""
+      kind: Service
+      namespace: ingress-nginx
+      name: ingress-nginx-controller
+      jqPathExpressions:
+        - .status
+    - group: ""
+      kind: Service
+      namespace: ingress-nginx
+      name: ingress-nginx-controller
+      managedFieldsManagers:
+        - aws-load-balancer-controller

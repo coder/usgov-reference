@@ -1,0 +1,26 @@
+# Convenience kustomization for the Keycloak workstream.
+#
+# It wires deployment/service/ingress together and generates the realm-import
+# ConfigMap directly from realm-coder.json (single source of truth, no
+# duplication). disableNameSuffixHash keeps the name stable as
+# `keycloak-realm-coder`, which the Deployment volume references.
+#
+# secrets.example.yaml is intentionally NOT included here; provision the real
+# `keycloak-db` and `keycloak-admin` Secrets out of band (see README.md).
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+namespace: keycloak
+
+resources:
+  - deployment.yaml
+  - service.yaml
+  - ingress.yaml
+
+configMapGenerator:
+  - name: keycloak-realm-coder
+    files:
+      - realm-coder.json
+
+generatorOptions:
+  disableNameSuffixHash: true

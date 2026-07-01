@@ -1,0 +1,121 @@
+# Helm values for the kiali/kiali-server chart 2.26.0 (Kiali server v2.26.0).
+#
+# Kiali is the Istio mesh observability console: a live service graph with
+# per-edge mTLS padlock badges, traffic rates, and links into the Istio Grafana
+# dashboards. v2.26 is the Kiali line that Istio 1.30 certifies (the istio-1.30.1
+# Kiali addon ships quay.io/kiali/kiali:v2.26 and labels it v2.26.0).
+#
+# This deploys the Kiali SERVER only (no Kiali operator). The chart renders a
+# ServiceAccount, ClusterRole/Binding, ConfigMap, Deployment, and Service. The
+# rendered manifest is committed next to this file as kiali.yaml; regenerate it
+# with:
+#   helm template kiali kiali/kiali-server --version 2.26.0 \
+#     --namespace istio-system \
+#     -f deploy/istio/observability/kiali-server-values.yaml \
+#     > deploy/istio/observability/kiali.yaml
+#
+# Air-gapped: the only container image is overridden to the private ECR mirror
+# (scripts/images.txt -> quay/kiali/kiali:v2.26.0). Helm renders the chart
+# client-side, so the cluster never pulls the chart, only the ECR image.
+deployment:
+  # Pull the server image from the private ECR mirror, not quay.io.
+  image_name: <ACCOUNT_ID>.dkr.ecr.us-gov-west-1.amazonaws.com/quay/kiali/kiali
+  image_version: v2.26.0
+  # Tags are mirrored immutably, so prefer the cached image on the node.
+  image_pull_policy: IfNotPresent
+  # Single demo replica; read the whole cluster for the mesh graph.
+  replicas: 1
+  cluster_wide_access: true
+  # Every authenticated Keycloak user shares Kiali's own ServiceAccount for
+  # cluster reads (auth.openid.disable_rbac below), so make the console strictly
+  # read-only. This prevents any logged-in realm user from mutating mesh config
+  # through Kiali wizards. The mesh graph, mTLS badges, and dashboards remain
+  # fully visible.
+  view_only_mode: true
+  # Kiali is reached through the Istio ingress gateway VirtualService
+  # (virtualservice-kiali.yaml), not a Kubernetes Ingress.
+  ingress_enabled: false
+  # Keep Kiali out of the mesh data plane; istio-system is not injected.
+  pod_labels:
+    sidecar.istio.io/inject: "false"
+  resources:
+    requests:
+      cpu: 10m
+      memory: 64Mi
+    limits:
+      memory: 1Gi
+
+# Auth: Keycloak OpenID Connect SSO. Kiali is fronted by the same Keycloak realm
+# ("coder") that fronts Coder, Grafana, and GitLab. Anonymous access is OFF: the
+# console redirects unauthenticated users to Keycloak's authorization endpoint.
+#
+# The confidential OIDC client "kiali" is provisioned by scripts/setup-kiali-oidc.py
+# (authorization-code flow + PKCE S256). The client secret is stored in AWS
+# Secrets Manager (<CLUSTER_NAME>/observability/kiali-oauth) and synced by ESO
+# into the Secret "kiali" (ns istio-system) under key "oidc-secret", which Kiali
+# reads automatically (externalsecret-kiali-oauth.yaml).
+#
+# disable_rbac: true is required here. This GovCloud EKS API server is not
+# integrated with Keycloak as an OIDC token issuer, so per-user Kubernetes RBAC
+# cannot validate realm tokens. With disable_rbac true, any user who completes
+# the Keycloak login may view the mesh, and Kiali queries the cluster with its
+# own ServiceAccount. deployment.view_only_mode true (above) keeps that shared
+# access read-only.
+#
+# Kiali signs its session token with a 32-byte signing key. A 16, 24, or 32
+# byte key keeps Kiali on the OIDC authorization-code flow (so the oidc-secret
+# Secret is required); a key of any other length silently downgrades to the
+# implicit flow. The key is sensitive, so it is NOT rendered into kiali.yaml.
+# Instead it is referenced as secret:<secretName>:<secretKey>: the chart mounts
+# the "signing-key" entry of the ESO-managed Secret "kiali" at
+# /kiali-override-secrets/login-token-signing-key/value.txt, which overrides the
+# placeholder reference string in the ConfigMap. ASM
+# <CLUSTER_NAME>/observability/kiali-oauth carries both oidc-secret and
+# signing-key; ESO syncs both into the Secret "kiali"
+# (externalsecret-kiali-oauth.yaml).
+login_token:
+  signing_key: "secret:kiali:signing-key"
+
+auth:
+  strategy: openid
+  openid:
+    issuer_uri: https://auth.<BASE_DOMAIN>/realms/coder
+    client_id: kiali
+    # preferred_username is delivered by Keycloak's default "profile" client
+    # scope; it labels the logged-in user in the Kiali UI.
+    username_claim: preferred_username
+    scopes:
+    - openid
+    - profile
+    - email
+    disable_rbac: true
+
+external_services:
+  # Istio control-plane (istiod) lives in istio-system.
+  istio:
+    root_namespace: istio-system
+  # In-cluster Prometheus from the kube-prometheus-stack release "kps".
+  prometheus:
+    url: http://kps-kube-prometheus-stack-prometheus.monitoring.svc:9090
+  # Link Kiali metric panels and "View in Grafana" actions to the same Grafana.
+  # internal_url is used server-side by Kiali to query Grafana; external_url is
+  # the browser-facing link rendered in the UI.
+  grafana:
+    enabled: true
+    internal_url: http://kps-grafana.monitoring.svc:80
+    external_url: https://grafana.<BASE_DOMAIN>
+  # No tracing backend wired for the demo (Tempo/Jaeger is a later add).
+  tracing:
+    enabled: false
+
+server:
+  port: 20001
+  # Serve under /kiali so the gateway host exposes https://<host>/kiali.
+  web_root: /kiali
+  # Tell Kiali its PUBLIC URL so OpenID redirect URIs are built correctly.
+  # Without this Kiali guesses the redirect_uri from its internal listen port
+  # (20001) and OIDC login fails. Behind the NLB+gateway, the public endpoint is
+  # https://kiali.<BASE_DOMAIN>/kiali on 443.
+  web_fqdn: kiali.<BASE_DOMAIN>
+  web_port: "443"
+  web_schema: https

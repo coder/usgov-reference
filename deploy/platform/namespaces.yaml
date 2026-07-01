@@ -1,0 +1,45 @@
+# Explicit Namespace manifests for platform namespaces not declared elsewhere in deploy/.
+# gitlab-runner and monitoring already have namespace.yaml in their respective
+# deploy/ subdirectories. kube-system and argocd are not managed here.
+# Labels preserved from live cluster (kubernetes.io/metadata.name stripped; it is
+# auto-populated by the API server and must not be set in a GitOps manifest).
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: coder
+  labels:
+    istio-injection: enabled
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: coder-workspaces
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: keycloak
+  labels:
+    istio-injection: enabled
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: gitlab
+  labels:
+    istio-injection: enabled
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: ingress-nginx
+  labels:
+    name: ingress-nginx
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: external-secrets
+  labels:
+    name: external-secrets
