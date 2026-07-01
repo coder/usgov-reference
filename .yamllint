@@ -1,0 +1,12 @@
+# yamllint configuration for the public reference repository.
+#
+# line-length is disabled: several manifests embed machine-generated Grafana
+# dashboard JSON on single long lines that must not be reflowed. The remaining
+# default rules still enforce indentation, key duplication, and syntax.
+extends: default
+rules:
+  line-length: disable
+  truthy:
+    allowed-values: ["true", "false", "yes", "no", "on", "off"]
+  comments:
+    min-spaces-from-content: 1
